@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  min-height: 100%;
+  background: #090a0f;
+}
+
+body {
+  font-family: var(--font-sans), "Segoe UI", sans-serif;
+}
+
+::selection {
+  background: #10b981;
+  color: #090a0f;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #1e2230 transparent;
+}
+
+input[type="checkbox"] {
+  accent-color: #10b981;
+}
+
+@keyframes reposhield-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.row-in {
+  animation: reposhield-in 180ms ease-out;
+}
