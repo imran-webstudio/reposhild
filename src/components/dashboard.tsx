@@ -6,6 +6,7 @@ import { BulkModal } from "@/components/bulk-modal";
 import { LockdownBanner } from "@/components/lockdown-banner";
 import { RemediationDrawer } from "@/components/remediation-drawer";
 import { formatElapsed, formatWhen, severityRank, statusLabel } from "@/lib/display";
+import type { RemediationSummary, ScanSummary } from "@/lib/history";
 import { readSse } from "@/lib/sse";
 import type { LockdownSignal, RateLimitSnapshot, RemediationResult, ScannedRepo } from "@/lib/scanner/types";
 
@@ -21,6 +22,10 @@ export function Dashboard() {
   const { data: session, status } = useSession();
   const [demo, setDemo] = useState(true);
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [databaseConfigured, setDatabaseConfigured] = useState<boolean | null>(null);
+  const [scanId, setScanId] = useState<string | null>(null);
+  const [history, setHistory] = useState<ScanSummary[]>([]);
+  const [cleanups, setCleanups] = useState<RemediationSummary[]>([]);
   const [repos, setRepos] = useState<ScannedRepo[]>([]);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -36,13 +41,19 @@ export function Dashboard() {
   const [notice, setNotice] = useState<RemediationResult | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const scanAbort = useRef<AbortController | null>(null);
+  const viewGeneration = useRef(0);
+  const historyLoaded = useRef(false);
+  const scanningRef = useRef(false);
 
   const login = session?.user?.login || session?.user?.name || "";
 
   useEffect(() => {
     fetch("/api/setup")
       .then((response) => response.json())
-      .then((body: { githubConfigured?: boolean }) => setConfigured(Boolean(body.githubConfigured)))
+      .then((body: { githubConfigured?: boolean; databaseConfigured?: boolean }) => {
+        setConfigured(Boolean(body.githubConfigured));
+        setDatabaseConfigured(Boolean(body.databaseConfigured));
+      })
       .catch(() => setConfigured(false));
   }, []);
 
@@ -58,6 +69,33 @@ export function Dashboard() {
       .catch(() => undefined);
     return () => controller.abort();
   }, [demo]);
+
+  useEffect(() => {
+    scanningRef.current = scanning;
+  }, [scanning]);
+
+  useEffect(() => {
+    if (demo || status !== "authenticated") return;
+    let cancelled = false;
+    fetch("/api/scans")
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return (await response.json()) as { scans?: ScanSummary[]; remediations?: RemediationSummary[] };
+      })
+      .then(async (body) => {
+        if (cancelled || !body) return;
+        const scans = body.scans ?? [];
+        setHistory(scans);
+        setCleanups(body.remediations ?? []);
+        if (historyLoaded.current || scanningRef.current || scans.length === 0) return;
+        historyLoaded.current = true;
+        await loadScan(scans[0].id);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [demo, status]);
 
   useEffect(() => {
     if (!toast) return;
@@ -120,6 +158,46 @@ export function Dashboard() {
     setProgress(null);
     setError(null);
     setNotice(null);
+    setScanId(null);
+    if (next) {
+      historyLoaded.current = false;
+      setHistory([]);
+      setCleanups([]);
+    }
+  }
+
+  async function refreshHistory() {
+    const response = await fetch("/api/scans");
+    if (!response.ok) return;
+    const body = (await response.json()) as { scans?: ScanSummary[]; remediations?: RemediationSummary[] };
+    setHistory(body.scans ?? []);
+    setCleanups(body.remediations ?? []);
+  }
+
+  async function loadScan(id: string) {
+    const generation = ++viewGeneration.current;
+    const response = await fetch(`/api/scans/${id}`);
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      scan?: ScanSummary;
+      repos?: ScannedRepo[];
+    };
+    if (generation !== viewGeneration.current) return;
+    if (!response.ok || !body.scan || !body.repos) {
+      setError(body.error || "Could not load that scan.");
+      return;
+    }
+    setScanId(body.scan.id);
+    setRepos(sortRepos(body.repos));
+    setSelected(new Set());
+    setActiveName(null);
+    setNotice(null);
+    setError(body.scan.error);
+    setProgress({
+      scanned: body.scan.repoScanned,
+      total: body.scan.repoTotal,
+      elapsedMs: body.scan.elapsedMs ?? 0,
+    });
   }
 
   async function scan() {
@@ -132,6 +210,7 @@ export function Dashboard() {
       return;
     }
 
+    viewGeneration.current += 1;
     scanAbort.current?.abort();
     const controller = new AbortController();
     scanAbort.current = controller;
@@ -141,6 +220,7 @@ export function Dashboard() {
     setActiveName(null);
     setNotice(null);
     setError(null);
+    setScanId(null);
     setProgress({ scanned: 0, total: 0, elapsedMs: 0 });
 
     try {
@@ -156,7 +236,17 @@ export function Dashboard() {
       }
       await readSse(response, (event, data) => {
         if (event === "start") {
-          const payload = data as { total: number; rate?: RateLimitSnapshot; lockdown?: LockdownSignal };
+          const payload = data as {
+            scanId?: string | null;
+            persisted?: boolean;
+            total: number;
+            rate?: RateLimitSnapshot;
+            lockdown?: LockdownSignal;
+          };
+          if (payload.scanId) setScanId(payload.scanId);
+          if (payload.persisted === false) {
+            setToast("Postgres is not connected, so this scan will not be kept.");
+          }
           setProgress({ scanned: 0, total: payload.total, elapsedMs: 0 });
           if (payload.rate) setRate(payload.rate);
           if (payload.lockdown) setLockdown(payload.lockdown);
@@ -170,13 +260,8 @@ export function Dashboard() {
           const payload = data as { elapsedMs: number; rate?: RateLimitSnapshot };
           setProgress((current) => (current ? { ...current, elapsedMs: payload.elapsedMs } : current));
           if (payload.rate) setRate(payload.rate);
-          setRepos((current) =>
-            [...current].sort((a, b) => {
-              const score = severityRank(b) - severityRank(a);
-              if (score !== 0) return score;
-              return a.fullName.localeCompare(b.fullName);
-            }),
-          );
+          setRepos((current) => sortRepos(current));
+          if (!demo) void refreshHistory();
         }
         if (event === "error") {
           const payload = data as { message?: string };
@@ -337,15 +422,46 @@ export function Dashboard() {
           </div>
         </div>
         <div className="border-t border-line">
-          <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-4 py-2 sm:px-6">
+          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-2 sm:px-6">
             <p data-testid="scan-progress" className="font-mono text-[12px] text-mist" aria-live="polite">
               {progress
                 ? `Scanned ${progress.scanned} / ${progress.total} repos (${formatElapsed(progress.elapsedMs)})`
                 : "Idle — trees and text blobs only, repositories are never cloned"}
             </p>
-            <p className="hidden font-mono text-[12px] text-mist sm:block">
-              {repos.length > 0 ? `${infected.length} infected · ${critical} critical` : ""}
-            </p>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              {!demo && history.length > 0 && (
+                <label className="flex items-center gap-2 font-mono text-[12px] text-mist">
+                  History
+                  <select
+                    data-testid="scan-history"
+                    aria-label="Scan history"
+                    value={scanId ?? history[0]?.id ?? ""}
+                    disabled={scanning}
+                    onChange={(event) => void loadScan(event.target.value)}
+                    className="h-7 max-w-[280px] rounded border border-line bg-panel px-2 text-bone"
+                  >
+                    {history.map((scan) => (
+                      <option key={scan.id} value={scan.id}>
+                        {formatWhen(scan.startedAt)} · {scan.infectedCount} infected · {scan.repoScanned}/{scan.repoTotal}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {cleanups[0] && !demo && (
+                <a
+                  href={cleanups[0].prUrl || cleanups[0].commitUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-[12px] text-emerald hover:underline"
+                >
+                  Last cleanup {cleanups[0].fullName}
+                </a>
+              )}
+              <p className="hidden font-mono text-[12px] text-mist sm:block">
+                {repos.length > 0 ? `${infected.length} infected · ${critical} critical` : ""}
+              </p>
+            </div>
           </div>
           <div className="h-0.5 bg-[#161822]">
             <div className="h-full transition-[width] duration-300" style={{ width: `${percent}%`, background: bar }} />
@@ -358,7 +474,7 @@ export function Dashboard() {
           <p className="mb-4 rounded-lg border border-crimson/40 bg-[#2A1215] px-4 py-3 text-sm text-[#FECACA]">{error}</p>
         )}
         {repos.length === 0 ? (
-          <Empty scanning={scanning} demo={demo} />
+          <Empty scanning={scanning} demo={demo} databaseConfigured={databaseConfigured} />
         ) : (
           <div className="overflow-x-auto rounded-xl border border-line bg-panel">
             <table className="w-full min-w-[880px] border-collapse text-left">
@@ -451,13 +567,14 @@ export function Dashboard() {
         <RemediationDrawer
           repo={active}
           demo={demo}
+          scanId={scanId}
           notice={notice}
           onClose={() => setActiveName(null)}
           onApplied={absorb}
         />
       )}
       {bulkOpen && (
-        <BulkModal repos={selectedRepos} demo={demo} onClose={() => setBulkOpen(false)} onApplied={absorb} />
+        <BulkModal repos={selectedRepos} demo={demo} scanId={scanId} onClose={() => setBulkOpen(false)} onApplied={absorb} />
       )}
     </div>
   );
@@ -533,7 +650,23 @@ function Tag({ children }: { children: string }) {
   );
 }
 
-function Empty({ scanning, demo }: { scanning: boolean; demo: boolean }) {
+function sortRepos(list: ScannedRepo[]): ScannedRepo[] {
+  return [...list].sort((a, b) => {
+    const score = severityRank(b) - severityRank(a);
+    if (score !== 0) return score;
+    return a.fullName.localeCompare(b.fullName);
+  });
+}
+
+function Empty({
+  scanning,
+  demo,
+  databaseConfigured,
+}: {
+  scanning: boolean;
+  demo: boolean;
+  databaseConfigured: boolean | null;
+}) {
   return (
     <section className="rounded-xl border border-line bg-panel px-6 py-10">
       <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mist">
@@ -542,6 +675,11 @@ function Empty({ scanning, demo }: { scanning: boolean; demo: boolean }) {
       <h2 className="mt-2 max-w-xl text-2xl font-semibold tracking-tight">
         {scanning ? "Reading trees and high-risk blobs." : "Look for hijacked scripts, cloaked droppers, and folder-open tasks."}
       </h2>
+      {!demo && databaseConfigured === false && (
+        <p className="mt-4 max-w-xl text-sm text-amber">
+          Postgres is not configured, so finished scans will stay in this tab only. Set DATABASE_URL or start the Compose stack.
+        </p>
+      )}
       <ol className="mt-6 grid gap-3 text-sm text-mist md:grid-cols-3">
         <li className="rounded-lg border border-line px-4 py-3">
           <span className="font-mono text-[11px] text-bone">Stage A</span>

@@ -2,7 +2,9 @@ import { DEMO_LOCKDOWN, DEMO_RATE, DEMO_REPOS, scanDemo } from "@/lib/demo/fixtu
 import { isAbortError, publicError } from "@/lib/github/errors";
 import { detectLockdown } from "@/lib/github/lockdown";
 import { createOctokit, readRateLimit, scanRepositories } from "@/lib/github/scanner";
-import { getGitHubToken } from "@/lib/github/session";
+import { getGitHubToken, type GitHubSession } from "@/lib/github/session";
+import { beginScan, finishScan, noteScanListed, saveScannedRepo } from "@/lib/persistence/history";
+import type { StoredScanStatus } from "@/lib/history";
 import type { LockdownSignal, RateLimitSnapshot } from "@/lib/scanner/types";
 
 export const runtime = "nodejs";
@@ -18,7 +20,7 @@ export async function POST(req: Request) {
     if (!session) {
       return Response.json({ error: "Sign in with GitHub to scan your repositories." }, { status: 401 });
     }
-    return streamLive(session.token, session.login, req.signal);
+    return streamLive(session, req.signal);
   }
 
   return streamDemo(req.signal);
@@ -55,48 +57,113 @@ function streamDemo(signal: AbortSignal) {
   return sseResponse(stream);
 }
 
-function streamLive(token: string, login: string, signal: AbortSignal) {
+function streamLive(session: GitHubSession, signal: AbortSignal) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          // The browser closed the stream. The scan still finishes so history can be saved.
+        }
       };
       let rate: RateLimitSnapshot | null = null;
+      let scanId: string | null = null;
+      let total = 0;
+      let scanned = 0;
+      const started = Date.now();
       try {
-        const octokit = createOctokit(token, (next) => {
+        const octokit = createOctokit(session.token, (next) => {
           rate = next;
         });
         const [limit, lockdown] = await Promise.all([
           readRateLimit(octokit),
-          detectLockdown(token, login).catch(() => quietLockdown()),
+          detectLockdown(session.token, session.login).catch(() => quietLockdown()),
         ]);
         rate = limit;
-        let total = 0;
-        let scanned = 0;
-        const started = Date.now();
+        scanId = await beginScan(
+          {
+            login: session.login,
+            githubId: session.githubId,
+            name: session.name,
+            email: session.email,
+            avatarUrl: session.avatarUrl,
+          },
+          {
+            lockdownActive: lockdown.active,
+            lockdownSummary: lockdown.summary,
+            rateRemaining: limit.remaining,
+            rateLimit: limit.limit,
+          },
+        ).catch((error) => {
+          console.error("Could not open a scan record", error);
+          return null;
+        });
         await scanRepositories(
           octokit,
-          (update) => {
+          async (update) => {
             total = update.total;
             scanned = update.scanned;
             send("progress", update);
+            if (!scanId) return;
+            try {
+              await saveScannedRepo(scanId, update.repo);
+            } catch (error) {
+              console.error(`Could not store ${update.repo.fullName}`, error);
+            }
           },
           signal,
-          (count) => {
+          async (count) => {
             total = count;
-            send("start", { total: count, elapsedMs: 0, rate, lockdown });
+            if (scanId) {
+              try {
+                await noteScanListed(scanId, count);
+              } catch (error) {
+                console.error("Could not store the repository count", error);
+              }
+            }
+            send("start", { scanId, persisted: Boolean(scanId), total: count, elapsedMs: 0, rate, lockdown });
           },
         );
-        send("done", { scanned, total, elapsedMs: Date.now() - started, rate });
+        const status: StoredScanStatus = signal.aborted ? "ABORTED" : "COMPLETED";
+        await closeScan(scanId, status, started, rate, null);
+        send("done", { scanId, scanned, total, elapsedMs: Date.now() - started, rate });
       } catch (error) {
-        if (!isAbortError(error)) send("error", { message: publicError(error) });
+        const aborted = isAbortError(error) || signal.aborted;
+        await closeScan(scanId, aborted ? "ABORTED" : "FAILED", started, rate, aborted ? null : publicError(error));
+        if (!aborted) send("error", { message: publicError(error) });
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          // Already closed.
+        }
       }
     },
   });
   return sseResponse(stream);
+}
+
+async function closeScan(
+  scanId: string | null,
+  status: StoredScanStatus,
+  started: number,
+  rate: RateLimitSnapshot | null,
+  error: string | null,
+) {
+  if (!scanId) return;
+  try {
+    await finishScan(scanId, {
+      status,
+      elapsedMs: Date.now() - started,
+      error,
+      rateRemaining: rate?.remaining ?? null,
+      rateLimit: rate?.limit ?? null,
+    });
+  } catch (cause) {
+    console.error("Could not finish the scan record", cause);
+  }
 }
 
 function quietLockdown(): LockdownSignal {

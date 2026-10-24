@@ -3,6 +3,7 @@ import { CleanError, publicError } from "@/lib/github/errors";
 import { remediateRepository } from "@/lib/github/remediate";
 import { createOctokit } from "@/lib/github/scanner";
 import { getGitHubToken } from "@/lib/github/session";
+import { recordRemediation } from "@/lib/persistence/history";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,7 @@ export async function POST(req: Request) {
       name?: string;
       mode?: string;
       demo?: boolean;
+      scanId?: string | null;
     };
     const owner = body.owner ?? "";
     const name = body.name ?? "";
@@ -35,6 +37,12 @@ export async function POST(req: Request) {
     }
     const octokit = createOctokit(session.token);
     const result = await remediateRepository(octokit, owner, name, mode);
+    const scanId = typeof body.scanId === "string" && body.scanId.length > 0 ? body.scanId : null;
+    try {
+      await recordRemediation(session.login, scanId, result);
+    } catch (error) {
+      console.error("Could not store the cleanup", error);
+    }
     return Response.json(result);
   } catch (error) {
     const status = error instanceof CleanError ? error.status : 500;

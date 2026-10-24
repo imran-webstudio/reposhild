@@ -5,6 +5,9 @@ import { isHighRiskPath, shouldSkipBlob } from "@/lib/github/paths";
 import { analyzeRepositoryFiles, statusFor } from "@/lib/scanner/engine";
 import type { FetchedFile, RateLimitSnapshot, ScannedRepo } from "@/lib/scanner/types";
 
+/** How many repositories hit GitHub at once. Each one is one tree call plus one GraphQL call. */
+const REPO_CONCURRENCY = 40;
+
 export interface ListedRepo {
   id: number;
   name: string;
@@ -20,7 +23,13 @@ export interface ListedRepo {
 }
 
 export function createOctokit(token: string, onRate?: (rate: RateLimitSnapshot) => void): Octokit {
-  const octokit = new Octokit({ auth: token, userAgent: "RepoShield/1.0" });
+  // The bundled throttle plugin queues every GraphQL call behind a 1-per-second write limiter.
+  // That serializes blob fetches. Repo concurrency is controlled below instead.
+  const octokit = new Octokit({
+    auth: token,
+    userAgent: "RepoShield/1.0",
+    throttle: { enabled: false },
+  });
   if (onRate) {
     octokit.hook.after("request", async (response: { headers?: Record<string, string | number | undefined> }) => {
       const headers = response?.headers ?? {};
@@ -62,15 +71,15 @@ export async function listRepositories(octokit: Octokit): Promise<ListedRepo[]> 
 
 export async function scanRepositories(
   octokit: Octokit,
-  onRepo: (update: { scanned: number; total: number; elapsedMs: number; repo: ScannedRepo }) => void,
+  onRepo: (update: { scanned: number; total: number; elapsedMs: number; repo: ScannedRepo }) => void | Promise<void>,
   signal?: AbortSignal,
-  onListed?: (total: number) => void,
+  onListed?: (total: number) => void | Promise<void>,
 ): Promise<void> {
   const repos = await listRepositories(octokit);
-  onListed?.(repos.length);
+  await onListed?.(repos.length);
   if (signal?.aborted) return;
   const started = Date.now();
-  const limit = pLimit(10);
+  const limit = pLimit(REPO_CONCURRENCY);
   let scanned = 0;
 
   await Promise.all(
@@ -79,7 +88,7 @@ export async function scanRepositories(
         if (signal?.aborted) return;
         const result = await inspectRemoteRepo(octokit, repo);
         scanned += 1;
-        onRepo({
+        await onRepo({
           scanned,
           total: repos.length,
           elapsedMs: Date.now() - started,
@@ -185,9 +194,11 @@ async function fetchBlobs(
   const chunks: string[][] = [];
   for (let index = 0; index < paths.length; index += 20) chunks.push(paths.slice(index, index + 20));
 
+  const portions = await Promise.all(
+    chunks.map((chunk, index) => fetchChunk(octokit, owner, repo, chunk, index === 0)),
+  );
   let committer: string | null = null;
-  for (let index = 0; index < chunks.length; index += 1) {
-    const portion = await fetchChunk(octokit, owner, repo, chunks[index], index === 0);
+  for (const portion of portions) {
     if (portion.committer) committer = portion.committer;
     for (const [path, text] of portion.texts) texts.set(path, text);
   }

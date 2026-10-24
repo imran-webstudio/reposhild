@@ -9,12 +9,14 @@ import type { RemediationResult, ScannedRepo } from "@/lib/scanner/types";
 export function RemediationDrawer({
   repo,
   demo,
+  scanId,
   notice,
   onClose,
   onApplied,
 }: {
   repo: ScannedRepo;
   demo: boolean;
+  scanId: string | null;
   notice: RemediationResult | null;
   onClose: () => void;
   onApplied: (result: RemediationResult) => void;
@@ -32,7 +34,7 @@ export function RemediationDrawer({
       const response = await fetch("/api/remediate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: repo.owner, name: repo.name, mode: action, demo }),
+        body: JSON.stringify({ owner: repo.owner, name: repo.name, mode: action, demo, scanId }),
       });
       const body = (await response.json()) as RemediationResult & { error?: string };
       if (!response.ok) throw new Error(body.error || "Remediation failed");

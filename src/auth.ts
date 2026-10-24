@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
+import { profileFromGitHub, rememberUser } from "@/lib/persistence/history";
 
 const secret =
   process.env.AUTH_SECRET || (process.env.NODE_ENV === "production" ? undefined : "reposhild-local-dev-secret");
@@ -30,8 +31,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     jwt({ token, account, profile }) {
       if (account?.access_token) token.accessToken = account.access_token;
       if (typeof account?.expires_at === "number") token.expiresAt = account.expires_at;
-      if (profile && typeof profile === "object" && "login" in profile && typeof profile.login === "string") {
-        token.login = profile.login;
+      const github = profileFromGitHub(profile);
+      if (github) {
+        token.login = github.login;
+        if (github.githubId) token.githubId = github.githubId;
+        if (github.name) token.name = github.name;
+        if (github.email) token.email = github.email;
+        if (github.avatarUrl) token.picture = github.avatarUrl;
       }
       return token;
     },
@@ -40,6 +46,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.login = token.login;
       }
       return session;
+    },
+  },
+  events: {
+    async signIn({ profile }) {
+      const github = profileFromGitHub(profile);
+      if (!github) return;
+      try {
+        await rememberUser(github);
+      } catch (error) {
+        console.error("Could not store the signed-in account", error);
+      }
     },
   },
 });

@@ -8,11 +8,13 @@ import type { RemediationResult, ScannedRepo } from "@/lib/scanner/types";
 export function BulkModal({
   repos,
   demo,
+  scanId,
   onClose,
   onApplied,
 }: {
   repos: ScannedRepo[];
   demo: boolean;
+  scanId: string | null;
   onClose: () => void;
   onApplied: (result: RemediationResult) => void;
 }) {
@@ -41,6 +43,7 @@ export function BulkModal({
             name: plan.repo.name,
             mode: action,
             demo,
+            scanId,
           }),
         });
         const body = (await response.json()) as RemediationResult & { error?: string };

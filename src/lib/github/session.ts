@@ -3,6 +3,10 @@ import { getToken } from "next-auth/jwt";
 export interface GitHubSession {
   token: string;
   login: string;
+  githubId: string | null;
+  name: string | null;
+  email: string | null;
+  avatarUrl: string | null;
 }
 
 /** Read the GitHub access token from the encrypted Auth.js cookie. Never send it to the browser. */
@@ -19,5 +23,9 @@ export async function getGitHubToken(req: Request): Promise<GitHubSession | null
   return {
     token: jwt.accessToken,
     login: typeof jwt.login === "string" ? jwt.login : "",
+    githubId: typeof jwt.githubId === "string" ? jwt.githubId : null,
+    name: typeof jwt.name === "string" ? jwt.name : null,
+    email: typeof jwt.email === "string" ? jwt.email : null,
+    avatarUrl: typeof jwt.picture === "string" ? jwt.picture : null,
   };
 }

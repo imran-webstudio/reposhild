@@ -1,0 +1,129 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  githubId     String?       @unique
+  login        String        @unique
+  name         String?
+  email        String?
+  avatarUrl    String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  scans        Scan[]
+  remediations Remediation[]
+}
+
+model Scan {
+  id               String     @id @default(cuid())
+  userId           String
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status           ScanStatus @default(RUNNING)
+  startedAt        DateTime   @default(now())
+  finishedAt       DateTime?
+  elapsedMs        Int?
+  repoTotal        Int        @default(0)
+  repoScanned      Int        @default(0)
+  infectedCount    Int        @default(0)
+  criticalCount    Int        @default(0)
+  error            String?
+  rateRemaining    Int?
+  rateLimit        Int?
+  lockdownActive   Boolean    @default(false)
+  lockdownSummary  String?
+  repos            ScanRepo[]
+
+  @@index([userId, startedAt(sort: Desc)])
+}
+
+model ScanRepo {
+  id            String     @id @default(cuid())
+  scanId        String
+  scan          Scan       @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  githubRepoId  String
+  owner         String
+  name          String
+  fullName      String
+  private       Boolean
+  archived      Boolean
+  fork          Boolean
+  isOrg         Boolean
+  defaultBranch String
+  pushedAt      DateTime?
+  lastCommitter String?
+  htmlUrl       String
+  durationMs    Int
+  status        String
+  error         String?
+  skippedReason String?
+  warnings      Json?
+  findings      Finding[]
+  files         ScanFile[]
+
+  @@unique([scanId, fullName])
+  @@index([scanId])
+}
+
+model Finding {
+  id            String   @id @default(cuid())
+  scanRepoId    String
+  scanRepo      ScanRepo @relation(fields: [scanRepoId], references: [id], onDelete: Cascade)
+  findingKey    String
+  severity      String
+  path          String
+  line          Int
+  rule          String
+  ruleId        String
+  strategy      String
+  message       String
+  snippet       String   @db.Text
+  revealed      String   @db.Text
+  hiddenPadding Boolean
+
+  @@index([scanRepoId])
+}
+
+model ScanFile {
+  id         String   @id @default(cuid())
+  scanRepoId String
+  scanRepo   ScanRepo @relation(fields: [scanRepoId], references: [id], onDelete: Cascade)
+  path       String
+  text       String   @db.Text
+  byteSize   Int
+
+  @@unique([scanRepoId, path])
+}
+
+model Remediation {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  owner        String
+  name         String
+  fullName     String
+  mode         String
+  commitSha    String
+  commitUrl    String
+  prUrl        String?
+  branch       String
+  message      String
+  fallbackToPr Boolean
+  changes      Json
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+enum ScanStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  ABORTED
+}
