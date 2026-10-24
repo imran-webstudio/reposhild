@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CleanupLoader } from "@/components/cleanup-loader";
 import { DiffView } from "@/components/diff-view";
 import { STRATEGY_LABEL } from "@/lib/display";
@@ -24,7 +24,34 @@ export function RemediationDrawer({
   const [mode, setMode] = useState<"inline" | "split">("inline");
   const [pending, setPending] = useState<"commit" | "pr" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const matched = notice && notice.owner === repo.owner && notice.name === repo.name ? notice : null;
+
+  useEffect(() => {
+    const node = dialogRef.current;
+    if (!node) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    node.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const items = [...node.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), textarea, input, select")];
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    node.addEventListener("keydown", onKey);
+    return () => {
+      node.removeEventListener("keydown", onKey);
+      previouslyFocused?.focus();
+    };
+  }, []);
 
   async function apply(action: "commit" | "pr") {
     setPending(action);
@@ -46,48 +73,56 @@ export function RemediationDrawer({
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end">
+    <div className="fixed inset-0 z-50 flex items-end justify-center p-3 sm:items-center sm:p-6">
       <button
         type="button"
         aria-label="Close review"
-        className="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-[2px]"
+        className="absolute inset-0 cursor-pointer bg-black/75 backdrop-blur-sm"
         disabled={pending !== null}
         onClick={() => {
           if (!pending) onClose();
         }}
       />
-      <aside
+      <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="review-title"
         aria-busy={pending !== null}
-        className="relative flex h-full w-full max-w-[760px] flex-col border-l border-line bg-panel shadow-drawer"
+        tabIndex={-1}
+        className="modal-arrive relative flex max-h-[min(92vh,860px)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-drawer outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
+        <div className="h-px bg-primary" aria-hidden="true" />
         {pending && (
           <CleanupLoader
             title={pending === "pr" ? "Opening a fix pull request" : "Removing malware"}
             detail={`${repo.fullName} · writing one commit`}
           />
         )}
-        <header className="border-b border-line px-4 py-3">
+        <header className="border-b border-line px-5 py-4">
           <div className="flex items-start justify-between gap-4">
-            <div>
+            <div className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-mist">Review and clean</p>
-              <h2 id="review-title" className="mt-1 font-mono text-lg font-medium text-bone">
+              <h2 id="review-title" className="mt-1 truncate font-mono text-lg font-medium text-bone">
                 {repo.fullName}
               </h2>
-              <p className="mt-1 text-sm text-mist">
-                Default branch <span className="font-mono text-bone">{repo.defaultBranch}</span>
-                {repo.warnings && repo.warnings.length > 0 ? ` · ${repo.warnings[0]}` : ""}
+              <p className="mt-2 flex flex-wrap items-center gap-2 text-sm text-mist">
+                <span className="rounded border border-line bg-ink px-1.5 py-0.5 font-mono text-[11px] text-bone">
+                  {repo.defaultBranch}
+                </span>
+                <span>
+                  {repo.findings.length} finding{repo.findings.length === 1 ? "" : "s"}
+                </span>
+                {repo.warnings && repo.warnings.length > 0 ? <span>{repo.warnings[0]}</span> : null}
               </p>
             </div>
-            <button type="button" onClick={onClose} disabled={pending !== null} className="btn-ghost">
+            <button type="button" onClick={onClose} disabled={pending !== null} className="btn-ghost shrink-0">
               Close
             </button>
           </div>
         </header>
 
-        <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4">
+        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {matched && (
             <div className="rounded-md border border-primary/40 bg-primary/10 px-3 py-3 text-sm text-bone">
               <p className="font-medium text-primary">Fix applied</p>
@@ -188,7 +223,7 @@ export function RemediationDrawer({
           </section>
         </div>
 
-        <footer className="border-t border-line px-4 py-3">
+        <footer className="border-t border-line bg-ink/40 px-5 py-4">
           <p className="font-mono text-[11px] text-mist">
             chore(security): remove malicious payload and sanitize scripts
           </p>
@@ -223,7 +258,7 @@ export function RemediationDrawer({
             </button>
           </div>
         </footer>
-      </aside>
+      </div>
     </div>
   );
 }

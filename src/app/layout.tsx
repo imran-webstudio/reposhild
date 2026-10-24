@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`}>
-      <body className="min-h-screen bg-ink font-sans text-bone antialiased">
+      <body className="min-h-screen bg-app font-sans text-bone antialiased">
         <Providers>{children}</Providers>
       </body>
     </html>

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BulkModal } from "@/components/bulk-modal";
 import { LockdownBanner } from "@/components/lockdown-banner";
 import { RemediationDrawer } from "@/components/remediation-drawer";
-import { formatElapsed, formatWhen, severityRank, statusLabel } from "@/lib/display";
+import { formatElapsed, formatWhen, statusLabel } from "@/lib/display";
 import type { RemediationSummary, ScanSummary } from "@/lib/history";
 import { readSse } from "@/lib/sse";
 import type { LockdownSignal, RateLimitSnapshot, RemediationResult, ScannedRepo } from "@/lib/scanner/types";
@@ -43,6 +43,7 @@ export function Dashboard() {
   const viewGeneration = useRef(0);
   const historyLoaded = useRef(false);
   const scanningRef = useRef(false);
+  const arrived = useRef(new Set<string>());
 
   const login = session?.user?.login || session?.user?.name || "";
 
@@ -174,7 +175,8 @@ export function Dashboard() {
       return;
     }
     setScanId(body.scan.id);
-    setRepos(sortRepos(body.repos));
+    arrived.current.clear();
+    setRepos(body.repos);
     setSelected(new Set());
     setActiveName(null);
     setNotice(null);
@@ -201,6 +203,7 @@ export function Dashboard() {
     const controller = new AbortController();
     scanAbort.current = controller;
     setScanning(true);
+    arrived.current.clear();
     setRepos([]);
     setSelected(new Set());
     setActiveName(null);
@@ -239,13 +242,13 @@ export function Dashboard() {
         if (event === "progress") {
           const payload = data as { scanned: number; total: number; elapsedMs: number; repo: ScannedRepo };
           setProgress({ scanned: payload.scanned, total: payload.total, elapsedMs: payload.elapsedMs });
-          setRepos((current) => [...current, payload.repo]);
+          arrived.current.add(payload.repo.fullName);
+          setRepos((current) => [payload.repo, ...current.filter((item) => item.fullName !== payload.repo.fullName)]);
         }
         if (event === "done") {
           const payload = data as { elapsedMs: number; rate?: RateLimitSnapshot };
           setProgress((current) => (current ? { ...current, elapsedMs: payload.elapsedMs } : current));
           if (payload.rate) setRate(payload.rate);
-          setRepos((current) => sortRepos(current));
           void refreshHistory();
         }
         if (event === "error") {
@@ -315,7 +318,7 @@ export function Dashboard() {
   const orgCount = repos.filter((repo) => repo.isOrg).length;
 
   return (
-    <div className="min-h-screen bg-ink text-bone">
+    <div className="min-h-screen bg-app text-bone">
       {lockdown && <LockdownBanner signal={lockdown} />}
       <header className="sticky top-0 z-30 border-b border-line bg-ink/95 backdrop-blur">
         <div className="mx-auto flex min-h-14 max-w-[1200px] flex-wrap items-center justify-between gap-3 px-4 py-2 sm:px-6">
@@ -490,7 +493,7 @@ export function Dashboard() {
                     <tr
                       key={repo.fullName}
                       data-testid={`repo-${repo.name}`}
-                      className="row-in border-b border-line last:border-0 hover:bg-muted/70"
+                      className={`${arrived.current.has(repo.fullName) ? "row-arrive" : ""} border-b border-line last:border-0 hover:bg-muted/70`}
                     >
                       <td className="px-3 py-2">
                         <input
@@ -506,7 +509,7 @@ export function Dashboard() {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={`h-7 w-0.5 rounded-full ${accentBar(badge.tone)}`} aria-hidden="true" />
                           <div>
-                            <p className="text-sm font-medium">{repo.name}</p>
+                            <p className="repo-name text-sm font-medium">{repo.name}</p>
                             <p className="font-mono text-xs text-mist">{repo.fullName}</p>
                           </div>
                           {repo.isOrg && <Tag>Org</Tag>}
@@ -670,14 +673,6 @@ function Tag({ children }: { children: string }) {
       {children}
     </span>
   );
-}
-
-function sortRepos(list: ScannedRepo[]): ScannedRepo[] {
-  return [...list].sort((a, b) => {
-    const score = severityRank(b) - severityRank(a);
-    if (score !== 0) return score;
-    return a.fullName.localeCompare(b.fullName);
-  });
 }
 
 function Empty({

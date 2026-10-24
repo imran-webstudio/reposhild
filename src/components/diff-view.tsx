@@ -48,9 +48,52 @@ function InlineDiff({ parts }: { parts: Change[] }) {
   let oldNo = 1;
   let newNo = 1;
   let shown = 0;
-  const rows: Array<{ key: string; kind: "add" | "del" | "same"; text: string; gutter: string }> = [];
+  const rows: Array<{
+    key: string;
+    kind: "add" | "del" | "same" | "strip";
+    text: string;
+    extra?: string;
+    gutter: string;
+  }> = [];
 
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    const addedNext = part.removed && parts[index + 1]?.added ? linesOf(parts[index + 1].value) : null;
+    if (addedNext) {
+      const removed = linesOf(part.value);
+      const width = Math.max(removed.length, addedNext.length);
+      for (let line = 0; line < width; line += 1) {
+        if (shown >= CAP) break;
+        const del = removed[line];
+        const add = addedNext[line];
+        if (del !== undefined && add !== undefined && add.length > 0 && del.startsWith(add) && del.length > add.length) {
+          rows.push({
+            key: `${shown}-strip`,
+            kind: "strip",
+            text: add,
+            extra: del.slice(add.length),
+            gutter: `${oldNo}`,
+          });
+          oldNo += 1;
+          newNo += 1;
+          shown += 1;
+          continue;
+        }
+        if (del !== undefined) {
+          rows.push({ key: `${shown}-del`, kind: "del", text: del, gutter: `${oldNo}  ` });
+          oldNo += 1;
+          shown += 1;
+        }
+        if (add !== undefined) {
+          rows.push({ key: `${shown}-add`, kind: "add", text: add, gutter: `  ${newNo}` });
+          newNo += 1;
+          shown += 1;
+        }
+      }
+      index += 1;
+      continue;
+    }
+
     const kind = part.added ? "add" : part.removed ? "del" : "same";
     for (const line of linesOf(part.value)) {
       if (shown >= CAP) break;
@@ -65,10 +108,21 @@ function InlineDiff({ parts }: { parts: Change[] }) {
   return (
     <div className="max-h-80 overflow-auto font-mono text-[12px] leading-5">
       {rows.map((row) => (
-        <div key={row.key} className={rowClass(row.kind)}>
+        <div key={row.key} className={rowClass(row.kind === "strip" ? "del" : row.kind)}>
           <span className="inline-block w-10 shrink-0 select-none pr-2 text-right text-mist/70">{row.gutter}</span>
-          <span className="inline-block w-4 shrink-0 text-mist">{row.kind === "add" ? "+" : row.kind === "del" ? "−" : " "}</span>
-          <span className="whitespace-pre-wrap break-all">{row.text || " "}</span>
+          <span className="inline-block w-4 shrink-0 text-mist">
+            {row.kind === "add" ? "+" : row.kind === "del" || row.kind === "strip" ? "−" : " "}
+          </span>
+          <span className="whitespace-pre-wrap break-all">
+            {row.kind === "strip" ? (
+              <>
+                <span className="text-mist">{row.text}</span>
+                <span className="text-accent">{row.extra}</span>
+              </>
+            ) : (
+              row.text || " "
+            )}
+          </span>
         </div>
       ))}
     </div>
@@ -80,11 +134,38 @@ function SplitDiff({ before, after }: { before: string; after: string }) {
   return (
     <div className="max-h-80 overflow-auto font-mono text-[12px] leading-5">
       {rows.map((row, index) => (
-        <div key={index} className="grid grid-cols-2">
-          <SplitCell cell={row.left} side="left" />
-          <SplitCell cell={row.right} side="right" />
-        </div>
+        <SplitPair key={index} left={row.left} right={row.right} />
       ))}
+    </div>
+  );
+}
+
+function SplitPair({ left, right }: Pair) {
+  const kept =
+    left?.mark === "-" && right?.mark === "+" && right.text.length > 0 && left.text.startsWith(right.text)
+      ? right.text
+      : null;
+  if (kept && left && left.text.length > kept.length) {
+    return (
+      <div className="grid grid-cols-2">
+        <div className="border-r border-line text-mist">
+          <span className="inline-block w-4 shrink-0 text-mist">−</span>
+          <span className="whitespace-pre-wrap break-all">
+            {kept}
+            <span className="bg-accent/10 text-accent">{left.text.slice(kept.length)}</span>
+          </span>
+        </div>
+        <div className="text-mist">
+          <span className="inline-block w-4 shrink-0"> </span>
+          <span className="whitespace-pre-wrap break-all">{kept}</span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-2">
+      <SplitCell cell={left} side="left" />
+      <SplitCell cell={right} side="right" />
     </div>
   );
 }

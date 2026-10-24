@@ -121,6 +121,40 @@ describe("postcss config sanitizer", () => {
     const source = `module.exports = { note: "${"a".repeat(520)}" };\n`;
     expect(sanitizeConfigSource(source)).toBe(source);
   });
+
+  it("keeps the closing }; when a packer payload is jammed onto the same line", () => {
+    const source = `module.exports = {
+  theme: {
+    typography: {},
+  },
+};global.i = 'A8-5929';const _0x3d50aa=_0x4540;(function(_0x9ec30b,_0x108733){eval('void 0');}());
+`;
+    const cleaned = sanitizeConfigSource(source);
+    expect(cleaned).toBe(`module.exports = {
+  theme: {
+    typography: {},
+  },
+};
+`);
+    expect(cleaned).not.toMatch(/global\.i|_0x|eval\s*\(/);
+    expect(loadConfig(cleaned)).toEqual({
+      theme: {
+        typography: {},
+      },
+    });
+  });
+
+  it("keeps }; when the first _0x marker sits after an IIFE wrapper", () => {
+    const source = `export default {
+  plugins: [],
+};(function(_0xabc123){eval('void 0');}(this));
+`;
+    const cleaned = sanitizeConfigSource(source);
+    expect(cleaned).toBe(`export default {
+  plugins: [],
+};
+`);
+  });
 });
 
 function loadConfig(source: string): unknown {

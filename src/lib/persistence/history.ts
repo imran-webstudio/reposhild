@@ -206,7 +206,7 @@ export async function readScan(login: string, scanId: string): Promise<{ scan: S
     include: {
       repos: {
         include: { findings: true, files: true },
-        orderBy: { fullName: "asc" },
+        orderBy: { id: "desc" },
       },
     },
   });

@@ -58,8 +58,12 @@ export function hasCampaignObfuscation(text: string): boolean {
   return false;
 }
 
+const CONFIG_PAYLOAD =
+  /global\s*\[\s*['"]!['"]\s*\]|global\s*\.\s*[A-Za-z_$][\w$]*\s*=|_0x[a-fA-F0-9]{3,}|\beval\s*\(|\bFunction\s*\(|child_process/;
+
 export function lineHasConfigMarker(line: string): boolean {
   if (/global\s*\[\s*['"]!['"]\s*\]/.test(line)) return true;
+  if (/global\s*\.\s*[A-Za-z_$][\w$]*\s*=/.test(line)) return true;
   if (/_0x[a-fA-F0-9]{3,}/.test(line)) return true;
   if (/\beval\s*\(/.test(line)) return true;
   if (/\bFunction\s*\(/.test(line)) return true;
@@ -74,9 +78,7 @@ function paddingIndex(line: string): number {
 }
 
 function markerIndex(line: string): number {
-  const match = line.match(
-    /global\s*\[\s*['"]!['"]\s*\]|_0x[a-fA-F0-9]{3,}|\beval\s*\(|\bFunction\s*\(|child_process/,
-  );
+  const match = line.match(CONFIG_PAYLOAD);
   return match?.index ?? -1;
 }
 
@@ -86,6 +88,16 @@ function isStructuralConfigLine(line: string): boolean {
   return /^(?:module\.exports|export\s|import\s|const\s|let\s|var\s|plugins\b|content\b|theme\b|tailwindcss\b|autoprefixer\b|require\(|\/{2}|\/\*|\*|\{|\}|\)|;|\]|\[)/.test(
     trimmed,
   );
+}
+
+/** Keep the real config closer (`};`, `]`, …) when a packer payload is jammed onto the same line. */
+function configHead(prefix: string): string | null {
+  const head = prefix.trimEnd();
+  if (!head) return null;
+  if (/[;{})\]]$/.test(head)) return head;
+  const lead = head.match(/^(.*[;{})\]])/);
+  if (lead?.[1]?.trim()) return lead[1].trimEnd();
+  return null;
 }
 
 /**
@@ -105,8 +117,8 @@ export function editConfigLine(line: string): ConfigLineEdit {
   if (lineHasConfigMarker(line)) {
     const at = markerIndex(line);
     if (at > 0) {
-      const head = line.slice(0, at).trimEnd();
-      if (head && /[;{}]$/.test(head)) return { kind: "trim", text: head };
+      const head = configHead(line.slice(0, at));
+      if (head) return { kind: "trim", text: head };
     }
     if (!isStructuralConfigLine(line)) return { kind: "drop" };
   }
