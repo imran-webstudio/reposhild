@@ -10,8 +10,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-reposhild}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-reposhild} -d ${POSTGRES_DB:-reposhild}"]
       interval: 5s

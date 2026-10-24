@@ -1,0 +1,5 @@
+# Loaded automatically by local `docker compose up`. Not copied to the VPS.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"

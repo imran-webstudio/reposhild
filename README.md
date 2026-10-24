@@ -49,7 +49,7 @@ Vitest checks that `node api.js &&` is stripped from `package.json` while depend
 
 ## VPS
 
-Copy `.env.example` to `/root/reposhild/.env` on the server, fill in the GitHub OAuth values, `AUTH_SECRET`, `AUTH_URL` (the public https origin), and a Postgres password. `POSTGRES_PASSWORD` and the password inside `DATABASE_URL` must match. That file has to exist before the first deploy. The workflow copies `docker-compose.yml` itself.
+Copy `.env.example` to `/root/reposhild/.env` on the server, fill in the GitHub OAuth values, `AUTH_SECRET`, `AUTH_URL` (the public https origin), and a Postgres password. `POSTGRES_PASSWORD` and the password inside `DATABASE_URL` must match. That file has to exist before the first deploy. The workflow copies `docker-compose.yml` itself. Postgres is only on the Compose network, so it does not take port 5432 on the VPS. Local `docker compose up` also reads `docker-compose.override.yml` and publishes Postgres on `127.0.0.1:5432`.
 
 ```bash
 docker compose up -d --build
