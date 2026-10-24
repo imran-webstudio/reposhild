@@ -62,7 +62,6 @@ export async function detectLockdown(token: string, loginHint = ""): Promise<Loc
 
   return {
     active,
-    demo: false,
     pushCount: Math.max(pushEvents, commitCount),
     repoCount: repos.size,
     windowMinutes: 120,

@@ -26,7 +26,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "${APP_PORT:-3120}:3120"
+      - "${APP_PORT:-3210}:3000"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-reposhild}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-reposhild}?schema=public
       AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
@@ -39,7 +39,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:'+(process.env.APP_PORT||3120)+'/api/setup').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:3000/api/setup').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 10s
       timeout: 5s

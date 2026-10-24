@@ -1,4 +1,3 @@
-import { DEMO_LOCKDOWN, DEMO_RATE, DEMO_REPOS, scanDemo } from "@/lib/demo/fixtures";
 import { isAbortError, publicError } from "@/lib/github/errors";
 import { detectLockdown } from "@/lib/github/lockdown";
 import { createOctokit, readRateLimit, scanRepositories } from "@/lib/github/scanner";
@@ -12,49 +11,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as { demo?: boolean };
-  const demo = body.demo !== false;
-
-  if (!demo) {
-    const session = await getGitHubToken(req);
-    if (!session) {
-      return Response.json({ error: "Sign in with GitHub to scan your repositories." }, { status: 401 });
-    }
-    return streamLive(session, req.signal);
+  const session = await getGitHubToken(req);
+  if (!session) {
+    return Response.json({ error: "Sign in with GitHub to scan your repositories." }, { status: 401 });
   }
-
-  return streamDemo(req.signal);
-}
-
-function streamDemo(signal: AbortSignal) {
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-      };
-      try {
-        send("start", {
-          total: DEMO_REPOS.length,
-          elapsedMs: 0,
-          rate: DEMO_RATE,
-          lockdown: DEMO_LOCKDOWN,
-        });
-        const done = await scanDemo((update) => send("progress", update), signal);
-        send("done", {
-          scanned: DEMO_REPOS.length,
-          total: DEMO_REPOS.length,
-          elapsedMs: done.elapsedMs,
-          rate: DEMO_RATE,
-        });
-      } catch (error) {
-        if (!isAbortError(error)) send("error", { message: publicError(error) });
-      } finally {
-        controller.close();
-      }
-    },
-  });
-  return sseResponse(stream);
+  return streamLive(session, req.signal);
 }
 
 function streamLive(session: GitHubSession, signal: AbortSignal) {
@@ -169,7 +130,6 @@ async function closeScan(
 function quietLockdown(): LockdownSignal {
   return {
     active: false,
-    demo: false,
     pushCount: 0,
     repoCount: 0,
     windowMinutes: 120,

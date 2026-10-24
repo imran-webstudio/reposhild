@@ -20,7 +20,6 @@ interface Progress {
 
 export function Dashboard() {
   const { data: session, status } = useSession();
-  const [demo, setDemo] = useState(true);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [databaseConfigured, setDatabaseConfigured] = useState<boolean | null>(null);
   const [scanId, setScanId] = useState<string | null>(null);
@@ -58,24 +57,29 @@ export function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (status !== "authenticated") {
+      setLockdown(null);
+      setRate(null);
+      return;
+    }
     const controller = new AbortController();
-    fetch(`/api/lockdown?demo=${demo ? "1" : "0"}`, { signal: controller.signal })
+    fetch("/api/lockdown", { signal: controller.signal })
       .then((response) => response.json())
       .then((body: { lockdown?: LockdownSignal; rate?: RateLimitSnapshot | null }) => {
         if (body.lockdown) setLockdown(body.lockdown);
         if (body.rate) setRate(body.rate);
-        if (!demo && !body.rate) setRate(null);
+        else setRate(null);
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [demo]);
+  }, [status]);
 
   useEffect(() => {
     scanningRef.current = scanning;
   }, [scanning]);
 
   useEffect(() => {
-    if (demo || status !== "authenticated") return;
+    if (status !== "authenticated") return;
     let cancelled = false;
     fetch("/api/scans")
       .then(async (response) => {
@@ -95,7 +99,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [demo, status]);
+  }, [status]);
 
   useEffect(() => {
     if (!toast) return;
@@ -148,24 +152,6 @@ export function Dashboard() {
   const allVisibleSelected =
     visibleInfected.length > 0 && visibleInfected.every((repo) => selected.has(repo.fullName));
 
-  function switchDemo(next: boolean) {
-    scanAbort.current?.abort();
-    setDemo(next);
-    setRepos([]);
-    setSelected(new Set());
-    setActiveName(null);
-    setBulkOpen(false);
-    setProgress(null);
-    setError(null);
-    setNotice(null);
-    setScanId(null);
-    if (next) {
-      historyLoaded.current = false;
-      setHistory([]);
-      setCleanups([]);
-    }
-  }
-
   async function refreshHistory() {
     const response = await fetch("/api/scans");
     if (!response.ok) return;
@@ -201,9 +187,9 @@ export function Dashboard() {
   }
 
   async function scan() {
-    if (!demo && status !== "authenticated") {
+    if (status !== "authenticated") {
       if (configured === false) {
-        setError("Add a GitHub OAuth app in .env.local before signing in. Demo mode still runs the full UI.");
+        setError("Add a GitHub OAuth app in .env.local before signing in.");
         return;
       }
       await signIn("github");
@@ -227,7 +213,6 @@ export function Dashboard() {
       const response = await fetch("/api/scan", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ demo }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -261,7 +246,7 @@ export function Dashboard() {
           setProgress((current) => (current ? { ...current, elapsedMs: payload.elapsedMs } : current));
           if (payload.rate) setRate(payload.rate);
           setRepos((current) => sortRepos(current));
-          if (!demo) void refreshHistory();
+          void refreshHistory();
         }
         if (event === "error") {
           const payload = data as { message?: string };
@@ -324,197 +309,205 @@ export function Dashboard() {
     setToast(result.message);
   }
 
-  async function resetDemo() {
-    await fetch("/api/demo/reset", { method: "POST" });
-    setRepos([]);
-    setProgress(null);
-    setSelected(new Set());
-    setNotice(null);
-    setToast("Demo fixtures restored. Scan again.");
-  }
-
   const percent = progress && progress.total > 0 ? Math.min(100, (progress.scanned / progress.total) * 100) : scanning ? 8 : 0;
-  const bar = critical > 0 ? "#EF4444" : infected.length > 0 ? "#F59E0B" : "#10B981";
+  const barClass = critical > 0 ? "bg-accent" : infected.length > 0 ? "bg-warn" : "bg-primary";
+  const cleanCount = repos.filter((repo) => repo.status === "clean").length;
+  const orgCount = repos.filter((repo) => repo.isOrg).length;
 
   return (
     <div className="min-h-screen bg-ink text-bone">
       {lockdown && <LockdownBanner signal={lockdown} />}
       <header className="sticky top-0 z-30 border-b border-line bg-ink/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-4 py-4 sm:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Shield />
-              <div>
-                <p className="text-base font-semibold tracking-tight">RepoShield</p>
-                <p className="text-xs text-mist">Supply-chain scan without cloning</p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-5">
-              <RateGauge rate={rate} />
-              <Account login={login} status={status} demo={demo} />
+        <div className="mx-auto flex min-h-14 max-w-[1200px] flex-wrap items-center justify-between gap-3 px-4 py-2 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2">
+            <Shield />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold tracking-tight">RepoShield</p>
+              <p className="truncate text-xs text-mist">Supply-chain scan, no clone</p>
             </div>
           </div>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Account login={login} status={status} />
+            <button
+              type="button"
+              data-testid="scan-button"
+              onClick={() => void scan()}
+              disabled={scanning}
+              className="btn-primary"
+            >
+              {scanning ? "Scanning…" : "Scan all repos"}
+            </button>
+          </div>
+        </div>
+      </header>
 
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex flex-wrap items-center gap-2">
+      <main className="mx-auto flex max-w-[1200px] flex-col gap-4 px-4 py-4 sm:px-6">
+        <section aria-label="Scan metrics" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-4">
+          <Metric label="Repositories" value={String(repos.length)} hint={scanning ? "In progress" : progress ? "Latest view" : "No scan yet"} />
+          <Metric
+            label="Infected"
+            value={String(infected.length)}
+            hint={infected.length > 0 ? "Needs review" : "None found"}
+            tone={infected.length > 0 ? "warn" : "primary"}
+          />
+          <Metric
+            label="Critical"
+            value={String(critical)}
+            hint={critical > 0 ? "Highest severity" : "None found"}
+            tone={critical > 0 ? "accent" : "primary"}
+          />
+          <Metric
+            label="Elapsed"
+            value={progress ? formatElapsed(progress.elapsedMs) : "—"}
+            hint={progress ? `${progress.scanned} of ${progress.total}` : "Waiting"}
+          />
+        </section>
+
+        <section aria-label="Scan progress" className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p data-testid="scan-progress" className="font-mono text-xs text-mist" aria-live="polite">
+              {progress
+                ? `Scanned ${progress.scanned} / ${progress.total} repos (${formatElapsed(progress.elapsedMs)})`
+                : "Idle. Trees and text blobs only. Repositories are never cloned."}
+            </p>
+            <RateGauge rate={rate} />
+          </div>
+          <div
+            className="h-1 overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(percent)}
+            aria-label="Scan progress"
+          >
+            <div className={`h-full motion-safe:transition-[width] motion-safe:duration-300 ${barClass}`} style={{ width: `${percent}%` }} />
+          </div>
+        </section>
+
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap gap-1 rounded-md border border-line bg-muted p-0.5" role="group" aria-label="Repository filters">
               <Pill label="All" count={repos.length} active={filter === "all"} onClick={() => setFilter("all")} />
-              <Pill
-                label="Infected"
-                count={infected.length}
-                active={filter === "infected"}
-                onClick={() => setFilter("infected")}
-              />
-              <Pill
-                label="Clean"
-                count={repos.filter((repo) => repo.status === "clean").length}
-                active={filter === "clean"}
-                onClick={() => setFilter("clean")}
-              />
-              <Pill
-                label="Org Repos"
-                count={repos.filter((repo) => repo.isOrg).length}
-                active={filter === "org"}
-                onClick={() => setFilter("org")}
-              />
+              <Pill label="Infected" count={infected.length} active={filter === "infected"} onClick={() => setFilter("infected")} />
+              <Pill label="Clean" count={cleanCount} active={filter === "clean"} onClick={() => setFilter("clean")} />
+              <Pill label="Org" count={orgCount} active={filter === "org"} onClick={() => setFilter("org")} />
+            </div>
+            <label className="relative block min-w-[12rem] flex-1 sm:flex-none">
+              <SearchIcon />
               <input
                 ref={searchRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Filter repositories"
                 aria-label="Filter repositories"
-                className="h-9 min-w-[200px] flex-1 rounded-md border border-line bg-panel px-3 text-sm text-bone outline-none placeholder:text-mist focus:border-mist sm:flex-none"
+                className="field w-full pl-8 sm:w-56"
               />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                data-testid="demo-toggle"
-                aria-pressed={demo}
-                onClick={() => switchDemo(!demo)}
-                className={`h-9 rounded-md border px-3 text-sm ${demo ? "border-amber/50 text-amber" : "border-line text-mist"}`}
-              >
-                Demo / Simulation Mode {demo ? "On" : "Off"}
-              </button>
-              {demo && (
-                <button onClick={resetDemo} className="h-9 rounded-md border border-line px-3 text-sm text-mist hover:text-bone">
-                  Reset demo
-                </button>
-              )}
-              <button
-                data-testid="scan-button"
-                onClick={() => void scan()}
-                disabled={scanning}
-                className="h-9 rounded-md bg-emerald px-3 text-sm font-semibold text-ink disabled:opacity-50"
-              >
-                {scanning ? "Scanning…" : "Scan All Repos"}
-              </button>
-              <button
-                data-testid="clean-selected"
-                disabled={selectedRepos.length === 0 || scanning}
-                onClick={() => {
-                  setActiveName(null);
-                  setBulkOpen(true);
-                }}
-                className="h-9 rounded-md border border-crimson/50 px-3 text-sm text-crimson disabled:opacity-40"
-              >
-                Clean All Selected ({selectedRepos.length})
-              </button>
-            </div>
+            </label>
           </div>
-        </div>
-        <div className="border-t border-line">
-          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-2 sm:px-6">
-            <p data-testid="scan-progress" className="font-mono text-[12px] text-mist" aria-live="polite">
-              {progress
-                ? `Scanned ${progress.scanned} / ${progress.total} repos (${formatElapsed(progress.elapsedMs)})`
-                : "Idle — trees and text blobs only, repositories are never cloned"}
-            </p>
-            <div className="flex flex-wrap items-center justify-end gap-3">
-              {!demo && history.length > 0 && (
-                <label className="flex items-center gap-2 font-mono text-[12px] text-mist">
-                  History
-                  <select
-                    data-testid="scan-history"
-                    aria-label="Scan history"
-                    value={scanId ?? history[0]?.id ?? ""}
-                    disabled={scanning}
-                    onChange={(event) => void loadScan(event.target.value)}
-                    className="h-7 max-w-[280px] rounded border border-line bg-panel px-2 text-bone"
-                  >
-                    {history.map((scan) => (
-                      <option key={scan.id} value={scan.id}>
-                        {formatWhen(scan.startedAt)} · {scan.infectedCount} infected · {scan.repoScanned}/{scan.repoTotal}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {cleanups[0] && !demo && (
-                <a
-                  href={cleanups[0].prUrl || cleanups[0].commitUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-mono text-[12px] text-emerald hover:underline"
+          <div className="flex flex-wrap items-center gap-2">
+            {history.length > 0 && (
+              <label className="flex items-center gap-2 text-xs text-mist">
+                History
+                <select
+                  data-testid="scan-history"
+                  aria-label="Scan history"
+                  value={scanId ?? history[0]?.id ?? ""}
+                  disabled={scanning}
+                  onChange={(event) => void loadScan(event.target.value)}
+                  className="field max-w-[16rem] cursor-pointer font-mono text-xs disabled:cursor-not-allowed"
                 >
-                  Last cleanup {cleanups[0].fullName}
-                </a>
-              )}
-              <p className="hidden font-mono text-[12px] text-mist sm:block">
-                {repos.length > 0 ? `${infected.length} infected · ${critical} critical` : ""}
-              </p>
-            </div>
-          </div>
-          <div className="h-0.5 bg-[#161822]">
-            <div className="h-full transition-[width] duration-300" style={{ width: `${percent}%`, background: bar }} />
+                  {history.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {formatWhen(item.startedAt)} · {item.infectedCount} infected · {item.repoScanned}/{item.repoTotal}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {cleanups[0] && (
+              <a
+                href={cleanups[0].prUrl || cleanups[0].commitUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-8 cursor-pointer items-center rounded-md px-2 font-mono text-xs text-primary transition-colors duration-200 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              >
+                Last cleanup {cleanups[0].fullName}
+              </a>
+            )}
+            <button
+              type="button"
+              data-testid="clean-selected"
+              disabled={selectedRepos.length === 0 || scanning}
+              onClick={() => {
+                setActiveName(null);
+                setBulkOpen(true);
+              }}
+              className="btn-danger"
+            >
+              Clean selected ({selectedRepos.length})
+            </button>
           </div>
         </div>
-      </header>
 
-      <main className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6">
         {error && (
-          <p className="mb-4 rounded-lg border border-crimson/40 bg-[#2A1215] px-4 py-3 text-sm text-[#FECACA]">{error}</p>
+          <p role="alert" className="rounded-lg border border-accent/50 bg-accent/10 px-3 py-2 text-sm text-bone">
+            {error}
+          </p>
         )}
+
         {repos.length === 0 ? (
-          <Empty scanning={scanning} demo={demo} databaseConfigured={databaseConfigured} />
+          <Empty
+            scanning={scanning}
+            signedIn={status === "authenticated"}
+            databaseConfigured={databaseConfigured}
+            onScan={() => void scan()}
+          />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-line bg-panel">
+          <div className="overflow-x-auto rounded-lg border border-line bg-panel">
             <table className="w-full min-w-[880px] border-collapse text-left">
-              <thead className="border-b border-line text-[11px] uppercase tracking-[0.14em] text-mist">
+              <thead className="border-b border-line text-[11px] font-medium uppercase tracking-[0.14em] text-mist">
                 <tr>
-                  <th className="w-10 px-3 py-3">
+                  <th className="w-10 px-3 py-2">
                     <input
                       type="checkbox"
                       aria-label="Select all infected repositories"
                       checked={allVisibleSelected}
                       onChange={toggleAll}
+                      className="cursor-pointer disabled:cursor-not-allowed"
                     />
                   </th>
-                  <th className="px-3 py-3 font-medium">Repository</th>
-                  <th className="px-3 py-3 font-medium">Last push</th>
-                  <th className="px-3 py-3 font-medium">Scan</th>
-                  <th className="px-3 py-3 font-medium">Status</th>
-                  <th className="px-3 py-3 font-medium" />
+                  <th className="px-3 py-2">Repository</th>
+                  <th className="px-3 py-2">Last push</th>
+                  <th className="px-3 py-2">Scan</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody>
                 {visible.map((repo) => {
                   const badge = statusLabel(repo);
                   return (
-                    <tr key={repo.fullName} data-testid={`repo-${repo.name}`} className="row-in border-b border-line/80 last:border-0">
-                      <td className="px-3 py-3">
+                    <tr
+                      key={repo.fullName}
+                      data-testid={`repo-${repo.name}`}
+                      className="row-in border-b border-line last:border-0 hover:bg-muted/70"
+                    >
+                      <td className="px-3 py-2">
                         <input
                           type="checkbox"
                           aria-label={`Select ${repo.fullName}`}
                           disabled={repo.status !== "infected"}
                           checked={selected.has(repo.fullName)}
                           onChange={() => toggleOne(repo.fullName)}
+                          className="cursor-pointer disabled:cursor-not-allowed"
                         />
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className={`h-8 w-0.5 rounded ${accent(badge.tone)}`} />
+                          <span className={`h-7 w-0.5 rounded-full ${accentBar(badge.tone)}`} aria-hidden="true" />
                           <div>
-                            <p className="font-medium">{repo.name}</p>
-                            <p className="font-mono text-[12px] text-mist">{repo.fullName}</p>
+                            <p className="text-sm font-medium">{repo.name}</p>
+                            <p className="font-mono text-xs text-mist">{repo.fullName}</p>
                           </div>
                           {repo.isOrg && <Tag>Org</Tag>}
                           {repo.private && <Tag>Private</Tag>}
@@ -522,29 +515,34 @@ export function Dashboard() {
                           {repo.archived && <Tag>Archived</Tag>}
                         </div>
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2">
                         <p className="text-sm">{formatWhen(repo.pushedAt)}</p>
-                        <p className={`font-mono text-[12px] ${repo.lastCommitter === "supply-bot" ? "text-amber" : "text-mist"}`}>
+                        <p className="font-mono text-xs text-mist">
                           {repo.lastCommitter ?? "Unknown committer"}
+                          {repo.lastCommitter === "supply-bot" && <span className="ml-2 text-warn">Flagged</span>}
                         </p>
                       </td>
-                      <td className="px-3 py-3 font-mono text-[12px] text-mist">{repo.durationMs} ms</td>
-                      <td className="px-3 py-3">
-                        <span className={`font-mono text-[11px] tracking-wide ${toneClass(badge.tone)}`}>{badge.text}</span>
+                      <td className="px-3 py-2 font-mono text-xs text-mist">{repo.durationMs} ms</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] tracking-wide ${toneClass(badge.tone)}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${accentBar(badge.tone)}`} aria-hidden="true" />
+                          {badge.text}
+                        </span>
                         {repo.skippedReason && <p className="mt-1 text-xs text-mist">{repo.skippedReason}</p>}
-                        {repo.error && <p className="mt-1 max-w-xs text-xs text-crimson">{repo.error}</p>}
+                        {repo.error && <p className="mt-1 max-w-xs text-xs text-accent">{repo.error}</p>}
                       </td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="px-3 py-2 text-right">
                         {repo.status === "infected" && (
                           <button
+                            type="button"
                             data-testid={`review-${repo.name}`}
                             onClick={() => {
                               setBulkOpen(false);
                               setActiveName(repo.fullName);
                             }}
-                            className="rounded-md border border-line px-3 py-1.5 text-sm text-bone hover:border-mist"
+                            className="btn-ghost"
                           >
-                            Review & Clean
+                            Review and clean
                           </button>
                         )}
                       </td>
@@ -559,14 +557,13 @@ export function Dashboard() {
       </main>
 
       {toast && (
-        <p className="fixed bottom-4 left-1/2 z-50 max-w-lg -translate-x-1/2 rounded-md border border-line bg-panel px-4 py-2 text-sm text-bone shadow-drawer">
+        <p role="status" className="fixed bottom-4 left-1/2 z-50 max-w-lg -translate-x-1/2 rounded-md border border-line bg-panel px-4 py-2 text-sm text-bone shadow-drawer">
           {toast}
         </p>
       )}
       {active && (
         <RemediationDrawer
           repo={active}
-          demo={demo}
           scanId={scanId}
           notice={notice}
           onClose={() => setActiveName(null)}
@@ -574,26 +571,25 @@ export function Dashboard() {
         />
       )}
       {bulkOpen && (
-        <BulkModal repos={selectedRepos} demo={demo} scanId={scanId} onClose={() => setBulkOpen(false)} onApplied={absorb} />
+        <BulkModal repos={selectedRepos} scanId={scanId} onClose={() => setBulkOpen(false)} onApplied={absorb} />
       )}
     </div>
   );
 }
 
-function Account({ login, status, demo }: { login: string; status: string; demo: boolean }) {
+function Account({ login, status }: { login: string; status: string }) {
   if (status === "authenticated" && login) {
     return (
-      <div className="flex items-center gap-3">
-        <p className="font-mono text-sm text-bone">@{login}</p>
-        {demo && <span className="font-mono text-[10px] uppercase tracking-wider text-amber">Simulating</span>}
-        <button onClick={() => void signOut()} className="text-sm text-mist hover:text-bone">
+      <div className="flex items-center gap-1">
+        <p className="hidden font-mono text-xs text-bone sm:block">@{login}</p>
+        <button type="button" onClick={() => void signOut()} className="btn-quiet">
           Sign out
         </button>
       </div>
     );
   }
   return (
-    <button onClick={() => void signIn("github")} className="text-sm text-mist hover:text-bone">
+    <button type="button" onClick={() => void signIn("github")} className="btn-ghost">
       Sign in with GitHub
     </button>
   );
@@ -603,19 +599,41 @@ function RateGauge({ rate }: { rate: RateLimitSnapshot | null }) {
   const remaining = rate?.remaining ?? 0;
   const limit = rate?.limit ?? 5000;
   const pct = limit > 0 && rate ? Math.max(0, Math.min(100, (remaining / limit) * 100)) : 0;
-  const color = !rate ? "#1E2230" : pct > 50 ? "#10B981" : pct > 20 ? "#F59E0B" : "#EF4444";
+  const fill = !rate ? "bg-line" : pct > 50 ? "bg-primary" : pct > 20 ? "bg-warn" : "bg-accent";
   return (
-    <div className="min-w-[190px]" data-testid="rate-gauge">
-      <div className="flex items-baseline justify-between font-mono text-[11px] text-mist">
-        <span>API</span>
+    <div className="min-w-[11rem]" data-testid="rate-gauge">
+      <div className="flex items-baseline justify-between gap-3 font-mono text-[11px] text-mist">
+        <span>{rate ? "API live" : "API idle"}</span>
         <span className="text-bone">
           {rate ? `${remaining.toLocaleString()} / ${limit.toLocaleString()}` : "— / 5,000"}
         </span>
       </div>
-      <div className="mt-1 h-1 overflow-hidden rounded-full bg-line">
-        <div className="h-full" style={{ width: `${rate ? pct : 0}%`, background: color }} />
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
+        <div className={`h-full ${fill}`} style={{ width: `${rate ? pct : 0}%` }} />
       </div>
-      {rate?.simulated && <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-mist">Simulated</p>}
+      {rate?.resetAt && <p className="mt-1 text-right font-mono text-[10px] text-mist">Resets {formatWhen(rate.resetAt)}</p>}
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  hint,
+  tone = "bone",
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  tone?: "bone" | "primary" | "warn" | "accent";
+}) {
+  const valueClass =
+    tone === "accent" ? "text-accent" : tone === "warn" ? "text-warn" : tone === "primary" ? "text-primary" : "text-bone";
+  return (
+    <div className="bg-panel px-3 py-2">
+      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-mist">{label}</p>
+      <p className={`mt-1 font-mono text-xl font-medium leading-none ${valueClass}`}>{value}</p>
+      <p className="mt-1 text-xs text-mist">{hint}</p>
     </div>
   );
 }
@@ -633,11 +651,15 @@ function Pill({
 }) {
   return (
     <button
+      type="button"
+      aria-pressed={active}
       onClick={onClick}
-      className={`h-9 rounded-full border px-3 text-sm ${active ? "border-bone bg-bone text-ink" : "border-line text-mist hover:text-bone"}`}
+      className={`h-7 cursor-pointer rounded px-2 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+        active ? "bg-primary text-on" : "text-mist hover:bg-panel hover:text-bone"
+      }`}
     >
       {label}
-      <span className="ml-2 font-mono text-[11px]">{count}</span>
+      <span className="ml-1.5 font-mono">{count}</span>
     </button>
   );
 }
@@ -660,68 +682,82 @@ function sortRepos(list: ScannedRepo[]): ScannedRepo[] {
 
 function Empty({
   scanning,
-  demo,
+  signedIn,
   databaseConfigured,
+  onScan,
 }: {
   scanning: boolean;
-  demo: boolean;
+  signedIn: boolean;
   databaseConfigured: boolean | null;
+  onScan: () => void;
 }) {
   return (
-    <section className="rounded-xl border border-line bg-panel px-6 py-10">
-      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mist">
-        {scanning ? "Scanning" : demo ? "Simulation ready" : "Connected scan"}
+    <section className="rounded-lg border border-line bg-panel px-4 py-6 sm:px-6">
+      <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-mist">
+        {scanning ? "Scanning" : signedIn ? "Ready to scan" : "Sign in to scan"}
       </p>
-      <h2 className="mt-2 max-w-xl text-2xl font-semibold tracking-tight">
+      <h2 className="mt-2 max-w-xl text-2xl font-semibold tracking-tight text-bone">
         {scanning ? "Reading trees and high-risk blobs." : "Look for hijacked scripts, cloaked droppers, and folder-open tasks."}
       </h2>
-      {!demo && databaseConfigured === false && (
-        <p className="mt-4 max-w-xl text-sm text-amber">
+      {signedIn && databaseConfigured === false && (
+        <p className="mt-3 max-w-xl text-sm text-warn">
           Postgres is not configured, so finished scans will stay in this tab only. Set DATABASE_URL or start the Compose stack.
         </p>
       )}
-      <ol className="mt-6 grid gap-3 text-sm text-mist md:grid-cols-3">
-        <li className="rounded-lg border border-line px-4 py-3">
-          <span className="font-mono text-[11px] text-bone">Stage A</span>
+      <ol className="mt-5 grid gap-2 text-sm text-mist md:grid-cols-3">
+        <li className="rounded-md border border-line bg-ink px-3 py-3">
+          <span className="font-mono text-[11px] text-primary">01 · Stage A</span>
           <p className="mt-1">List every personal and org repository, then read the git tree. Skip images, archives, lockfiles, build output, and blobs over 250 KB.</p>
         </li>
-        <li className="rounded-lg border border-line px-4 py-3">
-          <span className="font-mono text-[11px] text-bone">Stage B</span>
+        <li className="rounded-md border border-line bg-ink px-3 py-3">
+          <span className="font-mono text-[11px] text-primary">02 · Stage B</span>
           <p className="mt-1">Fetch only package manifests, config hooks, workflows, editor tasks, and suspicious scripts. One batched GraphQL query per repository.</p>
         </li>
-        <li className="rounded-lg border border-line px-4 py-3">
-          <span className="font-mono text-[11px] text-bone">Stage C</span>
+        <li className="rounded-md border border-line bg-ink px-3 py-3">
+          <span className="font-mono text-[11px] text-primary">03 · Stage C</span>
           <p className="mt-1">Match campaign runners and obfuscated tails. Preview the exact diff, then land the cleanup in a single commit.</p>
         </li>
       </ol>
+      <button type="button" onClick={onScan} disabled={scanning} className="btn-primary mt-5">
+        {scanning ? "Scanning…" : signedIn ? "Scan all repos" : "Sign in and scan"}
+      </button>
     </section>
   );
 }
 
 function Shield() {
   return (
-    <svg viewBox="0 0 32 32" className="h-9 w-9 text-emerald" aria-hidden="true">
+    <svg viewBox="0 0 24 24" className="h-6 w-6 shrink-0 text-primary" aria-hidden="true">
       <path
-        d="M16 3.2 27.2 7.8v8.6c0 6.2-4.4 10.6-11.2 13.8C9.2 27 4.8 22.6 4.8 16.4V7.8L16 3.2Z"
+        d="M12 3 19.5 6v5.8c0 4.4-3.1 7.6-7.5 9.7C7.6 19.4 4.5 16.2 4.5 11.8V6L12 3Z"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
       />
-      <path d="M11.2 16.2 14.3 19.2 20.8 12.6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M8.5 12.1 10.8 14.4 15.5 9.6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
 
-function accent(tone: "clean" | "critical" | "warn" | "muted"): string {
-  if (tone === "critical") return "bg-crimson";
-  if (tone === "warn") return "bg-amber";
-  if (tone === "clean") return "bg-emerald";
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-2 top-1.5 h-4 w-4 text-mist" aria-hidden="true">
+      <circle cx="11" cy="11" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M16 16.5 19.5 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function accentBar(tone: "clean" | "critical" | "warn" | "muted"): string {
+  if (tone === "critical") return "bg-accent";
+  if (tone === "warn") return "bg-warn";
+  if (tone === "clean") return "bg-primary";
   return "bg-line";
 }
 
 function toneClass(tone: "clean" | "critical" | "warn" | "muted"): string {
-  if (tone === "critical") return "text-crimson";
-  if (tone === "warn") return "text-amber";
-  if (tone === "clean") return "text-emerald";
+  if (tone === "critical") return "text-accent";
+  if (tone === "warn") return "text-warn";
+  if (tone === "clean") return "text-primary";
   return "text-mist";
 }

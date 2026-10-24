@@ -28,9 +28,9 @@ export function DiffView({
   const truncated = countLines(parts) > CAP;
 
   return (
-    <div data-testid="diff-view" className="overflow-hidden rounded-lg border border-line bg-[#0B0D14]">
+    <div data-testid="diff-view" className="overflow-hidden rounded-md border border-line bg-ink">
       {after == null && (
-        <p className="border-b border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-crimson">
+        <p className="border-b border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-accent">
           File will be deleted
         </p>
       )}
@@ -138,7 +138,7 @@ function countLines(parts: Change[]): number {
 }
 
 function rowClass(kind: "add" | "del" | "same"): string {
-  if (kind === "add") return "bg-emerald/10 text-[#6EE7B7]";
-  if (kind === "del") return "bg-crimson/10 text-[#FCA5A5]";
+  if (kind === "add") return "bg-primary/10 text-primary";
+  if (kind === "del") return "bg-accent/10 text-accent";
   return "text-mist";
 }

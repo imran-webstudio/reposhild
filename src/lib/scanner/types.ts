@@ -67,7 +67,6 @@ export interface FileChange {
 
 export interface LockdownSignal {
   active: boolean;
-  demo: boolean;
   pushCount: number;
   repoCount: number;
   windowMinutes: number;
@@ -79,7 +78,6 @@ export interface RateLimitSnapshot {
   remaining: number;
   limit: number;
   resetAt: string | null;
-  simulated?: boolean;
 }
 
 export interface ScanEventProgress {
@@ -100,5 +98,4 @@ export interface RemediationResult {
   message: string;
   changes: FileChange[];
   fallbackToPr: boolean;
-  demo: boolean;
 }

@@ -192,6 +192,5 @@ function result(input: {
     message: input.message,
     changes: input.changes,
     fallbackToPr: input.fallbackToPr,
-    demo: false,
   };
 }

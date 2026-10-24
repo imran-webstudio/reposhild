@@ -1,19 +1,18 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { CleanupLoader } from "@/components/cleanup-loader";
 import { DiffView } from "@/components/diff-view";
 import { planRemediation } from "@/lib/sanitizer";
 import type { RemediationResult, ScannedRepo } from "@/lib/scanner/types";
 
 export function BulkModal({
   repos,
-  demo,
   scanId,
   onClose,
   onApplied,
 }: {
   repos: ScannedRepo[];
-  demo: boolean;
   scanId: string | null;
   onClose: () => void;
   onApplied: (result: RemediationResult) => void;
@@ -42,7 +41,6 @@ export function BulkModal({
             owner: plan.repo.owner,
             name: plan.repo.name,
             mode: action,
-            demo,
             scanId,
           }),
         });
@@ -64,26 +62,40 @@ export function BulkModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-      <button aria-label="Close bulk clean" className="absolute inset-0 bg-black/70" onClick={onClose} />
+      <button
+        type="button"
+        aria-label="Close bulk clean"
+        className="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-[2px]"
+        disabled={pending !== null}
+        onClick={() => {
+          if (!pending) onClose();
+        }}
+      />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="bulk-title"
-        className="relative flex max-h-[92vh] w-full max-w-4xl flex-col rounded-t-xl border border-line bg-ink shadow-drawer sm:rounded-xl"
+        aria-busy={pending !== null}
+        className="relative flex max-h-[92vh] w-full max-w-4xl flex-col rounded-t-lg border border-line bg-panel shadow-drawer sm:rounded-lg"
       >
-        <header className="border-b border-line px-5 py-4">
-          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mist">Bulk remediation</p>
-          <h2 id="bulk-title" className="mt-1 text-lg text-bone">
+        {pending && (
+          <CleanupLoader
+            title={pending === "pr" ? "Opening fix pull requests" : "Removing malware"}
+            detail={cursor ? `${cursor} · writing one commit` : "Preparing the cleanup"}
+            done={finished}
+            total={actionable.length}
+          />
+        )}
+        <header className="border-b border-line px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-mist">Bulk remediation</p>
+          <h2 id="bulk-title" className="mt-1 text-lg font-semibold text-bone">
             Clean {actionable.length} repositor{actionable.length === 1 ? "y" : "ies"}
           </h2>
-          <p className="mt-1 text-sm text-mist">
-            Every deletion and edit below lands in one commit per repository.
-            {demo ? " Demo mode does not push to GitHub." : ""}
-          </p>
+          <p className="mt-1 text-sm text-mist">Every deletion and edit below lands in one commit per repository.</p>
         </header>
-        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
           {plans.map(({ repo, changes }) => (
-            <section key={repo.fullName} className="rounded-lg border border-line bg-panel p-3">
+            <section key={repo.fullName} className="rounded-md border border-line bg-ink p-3">
               <h3 className="font-mono text-sm text-bone">{repo.fullName}</h3>
               {changes.length === 0 ? (
                 <p className="mt-2 text-sm text-mist">No automatic edit.</p>
@@ -102,13 +114,13 @@ export function BulkModal({
             </section>
           ))}
           {failures.map((failure) => (
-            <p key={failure.name} className="text-sm text-crimson">
+            <p key={failure.name} role="alert" className="text-sm text-accent">
               {failure.name}: {failure.message}
             </p>
           ))}
         </div>
-        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-4">
-          <p className="font-mono text-[12px] text-mist">
+        <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3">
+          <p className="font-mono text-xs text-mist">
             {pending
               ? `Cleaning ${finished} / ${actionable.length}${cursor ? ` · ${cursor}` : ""}`
               : finished > 0
@@ -116,21 +128,23 @@ export function BulkModal({
                 : "Review every diff, then commit."}
           </p>
           <div className="flex flex-wrap gap-2">
-            <button onClick={onClose} className="rounded-md border border-line px-3 py-2 text-sm text-mist">
+            <button type="button" onClick={onClose} disabled={pending !== null} className="btn-ghost">
               Close
             </button>
             <button
+              type="button"
               data-testid="bulk-commit"
               disabled={pending !== null || actionable.length === 0}
               onClick={() => applyAll("commit")}
-              className="rounded-md bg-emerald px-3 py-2 text-sm font-semibold text-ink disabled:opacity-40"
+              className="btn-primary"
             >
               Commit fixes to default branches
             </button>
             <button
+              type="button"
               disabled={pending !== null || actionable.length === 0}
               onClick={() => applyAll("pr")}
-              className="rounded-md border border-line px-3 py-2 text-sm text-bone disabled:opacity-40"
+              className="btn-ghost"
             >
               Open fix PRs
             </button>

@@ -1,4 +1,3 @@
-import { remediateDemo } from "@/lib/demo/remediate";
 import { CleanError, publicError } from "@/lib/github/errors";
 import { remediateRepository } from "@/lib/github/remediate";
 import { createOctokit } from "@/lib/github/scanner";
@@ -16,19 +15,13 @@ export async function POST(req: Request) {
       owner?: string;
       name?: string;
       mode?: string;
-      demo?: boolean;
       scanId?: string | null;
     };
     const owner = body.owner ?? "";
     const name = body.name ?? "";
     const mode = body.mode === "pr" ? "pr" : "commit";
-    const demo = body.demo !== false;
     if (!NAME.test(owner) || !NAME.test(name)) {
       return Response.json({ error: "Invalid repository." }, { status: 400 });
-    }
-
-    if (demo) {
-      return Response.json(remediateDemo(owner, name, mode));
     }
 
     const session = await getGitHubToken(req);
