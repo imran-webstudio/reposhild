@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { CleanupLoader } from "@/components/cleanup-loader";
 import { DiffView } from "@/components/diff-view";
+import { repoWebUrl } from "@/lib/display";
 import { planRemediation } from "@/lib/sanitizer";
 import type { RemediationResult, ScannedRepo } from "@/lib/scanner/types";
 
@@ -78,14 +79,7 @@ export function BulkModal({
         aria-busy={pending !== null}
         className="relative flex max-h-[92vh] w-full max-w-4xl flex-col rounded-t-lg border border-line bg-panel shadow-drawer sm:rounded-lg"
       >
-        {pending && (
-          <CleanupLoader
-            title={pending === "pr" ? "Opening fix pull requests" : "Removing malware"}
-            detail={cursor ? `${cursor} · writing one commit` : "Preparing the cleanup"}
-            done={finished}
-            total={actionable.length}
-          />
-        )}
+        <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${pending ? "modal-content-busy" : ""}`}>
         <header className="border-b border-line px-4 py-3">
           <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-mist">Bulk remediation</p>
           <h2 id="bulk-title" className="mt-1 text-lg font-semibold text-bone">
@@ -96,7 +90,16 @@ export function BulkModal({
         <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
           {plans.map(({ repo, changes }) => (
             <section key={repo.fullName} className="rounded-md border border-line bg-ink p-3">
-              <h3 className="font-mono text-sm text-bone">{repo.fullName}</h3>
+              <h3 className="font-mono text-sm text-bone">
+                <a
+                  href={repoWebUrl(repo)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-sm hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
+                  {repo.fullName}
+                </a>
+              </h3>
               {changes.length === 0 ? (
                 <p className="mt-2 text-sm text-mist">No automatic edit.</p>
               ) : (
@@ -150,6 +153,15 @@ export function BulkModal({
             </button>
           </div>
         </footer>
+        </div>
+        {pending && (
+          <CleanupLoader
+            title={pending === "pr" ? "Opening fix pull requests" : "Removing malware"}
+            detail={cursor ? `${cursor} · writing one commit` : "Preparing the cleanup"}
+            done={finished}
+            total={actionable.length}
+          />
+        )}
       </div>
     </div>
   );

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BulkModal } from "@/components/bulk-modal";
 import { LockdownBanner } from "@/components/lockdown-banner";
 import { RemediationDrawer } from "@/components/remediation-drawer";
-import { formatElapsed, formatWhen, statusLabel } from "@/lib/display";
+import { formatElapsed, formatWhen, repoWebUrl, statusLabel } from "@/lib/display";
 import type { RemediationSummary, ScanSummary } from "@/lib/history";
 import { readSse } from "@/lib/sse";
 import type { LockdownSignal, RateLimitSnapshot, RemediationResult, ScannedRepo } from "@/lib/scanner/types";
@@ -37,6 +37,8 @@ export function Dashboard() {
   const [lockdown, setLockdown] = useState<LockdownSignal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const [lightTheme, setLightTheme] = useState(false);
   const [notice, setNotice] = useState<RemediationResult | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const scanAbort = useRef<AbortController | null>(null);
@@ -122,6 +124,14 @@ export function Dashboard() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    setLightTheme(document.documentElement.classList.contains("light"));
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   useEffect(() => {
@@ -318,18 +328,35 @@ export function Dashboard() {
   const orgCount = repos.filter((repo) => repo.isOrg).length;
 
   return (
-    <div className="min-h-screen bg-app text-bone">
-      {lockdown && <LockdownBanner signal={lockdown} />}
-      <header className="sticky top-0 z-30 border-b border-line bg-ink/95 backdrop-blur">
+    <div className="min-h-screen text-bone">
+      <header
+        className={`sticky top-0 z-30 border-b border-line backdrop-blur-md ${scrolled ? "bg-[var(--nav-bg-scroll)]" : "bg-[var(--nav-bg)]"}`}
+      >
         <div className="mx-auto flex min-h-14 max-w-[1200px] flex-wrap items-center justify-between gap-3 px-4 py-2 sm:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <Shield />
             <div className="min-w-0">
-              <p className="text-sm font-semibold tracking-tight">RepoShield</p>
+              <p className="font-display text-[1.05rem] font-semibold tracking-tight">
+                Repo<span className="text-primary">Shield</span>
+              </p>
               <p className="truncate text-xs text-mist">Supply-chain scan, no clone</p>
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                const next = !document.documentElement.classList.contains("light");
+                document.documentElement.classList.toggle("dark", !next);
+                document.documentElement.classList.toggle("light", next);
+                localStorage.setItem("reposhild-theme", next ? "light" : "dark");
+                setLightTheme(next);
+              }}
+              className="btn-quiet"
+              aria-label={lightTheme ? "Switch to dark theme" : "Switch to light theme"}
+            >
+              {lightTheme ? "Dark" : "Light"}
+            </button>
             <Account login={login} status={status} />
             <button
               type="button"
@@ -343,9 +370,10 @@ export function Dashboard() {
           </div>
         </div>
       </header>
+      {lockdown && <LockdownBanner signal={lockdown} />}
 
       <main className="mx-auto flex max-w-[1200px] flex-col gap-4 px-4 py-4 sm:px-6">
-        <section aria-label="Scan metrics" className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-4">
+        <section aria-label="Scan metrics" className="pane grid grid-cols-2 overflow-hidden rounded-2xl sm:grid-cols-4 sm:divide-x sm:divide-white/10">
           <Metric label="Repositories" value={String(repos.length)} hint={scanning ? "In progress" : progress ? "Latest view" : "No scan yet"} />
           <Metric
             label="Infected"
@@ -376,7 +404,7 @@ export function Dashboard() {
             <RateGauge rate={rate} />
           </div>
           <div
-            className="h-1 overflow-hidden rounded-full bg-muted"
+            className="progress-track"
             role="progressbar"
             aria-valuemin={0}
             aria-valuemax={100}
@@ -389,7 +417,7 @@ export function Dashboard() {
 
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-wrap gap-1 rounded-md border border-line bg-muted p-0.5" role="group" aria-label="Repository filters">
+            <div className="glass flex flex-wrap gap-1 rounded-full p-1" role="group" aria-label="Repository filters">
               <Pill label="All" count={repos.length} active={filter === "all"} onClick={() => setFilter("all")} />
               <Pill label="Infected" count={infected.length} active={filter === "infected"} onClick={() => setFilter("infected")} />
               <Pill label="Clean" count={cleanCount} active={filter === "clean"} onClick={() => setFilter("clean")} />
@@ -466,9 +494,9 @@ export function Dashboard() {
             onScan={() => void scan()}
           />
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-line bg-panel">
-            <table className="w-full min-w-[880px] border-collapse text-left">
-              <thead className="border-b border-line text-[11px] font-medium uppercase tracking-[0.14em] text-mist">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[880px] border-separate border-spacing-y-2 text-left">
+              <thead className="text-[11px] font-medium uppercase tracking-[0.14em] text-faint">
                 <tr>
                   <th className="w-10 px-3 py-2">
                     <input
@@ -493,7 +521,7 @@ export function Dashboard() {
                     <tr
                       key={repo.fullName}
                       data-testid={`repo-${repo.name}`}
-                      className={`${arrived.current.has(repo.fullName) ? "row-arrive" : ""} border-b border-line last:border-0 hover:bg-muted/70`}
+                      className={`${arrived.current.has(repo.fullName) ? "row-arrive" : ""} repo-card`}
                     >
                       <td className="px-3 py-2">
                         <input
@@ -509,7 +537,14 @@ export function Dashboard() {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={`h-7 w-0.5 rounded-full ${accentBar(badge.tone)}`} aria-hidden="true" />
                           <div>
-                            <p className="repo-name text-sm font-medium">{repo.name}</p>
+                            <a
+                              href={repoWebUrl(repo)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="repo-name rounded-sm text-sm font-medium text-bone hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                            >
+                              {repo.name}
+                            </a>
                             <p className="font-mono text-xs text-mist">{repo.fullName}</p>
                           </div>
                           {repo.isOrg && <Tag>Org</Tag>}
@@ -535,19 +570,24 @@ export function Dashboard() {
                         {repo.error && <p className="mt-1 max-w-xs text-xs text-accent">{repo.error}</p>}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {repo.status === "infected" && (
-                          <button
-                            type="button"
-                            data-testid={`review-${repo.name}`}
-                            onClick={() => {
-                              setBulkOpen(false);
-                              setActiveName(repo.fullName);
-                            }}
-                            className="btn-ghost"
-                          >
-                            Review and clean
-                          </button>
-                        )}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <a href={repoWebUrl(repo)} target="_blank" rel="noreferrer" className="btn-quiet">
+                            Open repo
+                          </a>
+                          {repo.status === "infected" && (
+                            <button
+                              type="button"
+                              data-testid={`review-${repo.name}`}
+                              onClick={() => {
+                                setBulkOpen(false);
+                                setActiveName(repo.fullName);
+                              }}
+                              className="btn-ghost"
+                            >
+                              Review and clean
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -557,6 +597,7 @@ export function Dashboard() {
             {visible.length === 0 && <p className="px-4 py-8 text-sm text-mist">No repositories match this filter.</p>}
           </div>
         )}
+
       </main>
 
       {toast && (
@@ -633,8 +674,8 @@ function Metric({
   const valueClass =
     tone === "accent" ? "text-accent" : tone === "warn" ? "text-warn" : tone === "primary" ? "text-primary" : "text-bone";
   return (
-    <div className="bg-panel px-3 py-2">
-      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-mist">{label}</p>
+    <div className="bg-transparent px-3 py-2">
+      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-faint">{label}</p>
       <p className={`mt-1 font-mono text-xl font-medium leading-none ${valueClass}`}>{value}</p>
       <p className="mt-1 text-xs text-mist">{hint}</p>
     </div>
@@ -657,7 +698,7 @@ function Pill({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`h-7 cursor-pointer rounded px-2 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+      className={`h-7 cursor-pointer rounded-full px-3 text-xs font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
         active ? "bg-primary text-on" : "text-mist hover:bg-panel hover:text-bone"
       }`}
     >
@@ -687,11 +728,11 @@ function Empty({
   onScan: () => void;
 }) {
   return (
-    <section className="rounded-lg border border-line bg-panel px-4 py-6 sm:px-6">
+    <section className="pane rounded-2xl px-4 py-6 sm:px-6">
       <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-mist">
         {scanning ? "Scanning" : signedIn ? "Ready to scan" : "Sign in to scan"}
       </p>
-      <h2 className="mt-2 max-w-xl text-2xl font-semibold tracking-tight text-bone">
+      <h2 className="mt-2 max-w-xl font-display text-2xl font-semibold tracking-tight text-bone">
         {scanning ? "Reading trees and high-risk blobs." : "Look for hijacked scripts, cloaked droppers, and folder-open tasks."}
       </h2>
       {signedIn && databaseConfigured === false && (
@@ -700,15 +741,15 @@ function Empty({
         </p>
       )}
       <ol className="mt-5 grid gap-2 text-sm text-mist md:grid-cols-3">
-        <li className="rounded-md border border-line bg-ink px-3 py-3">
+        <li className="glass rounded-xl px-3 py-3">
           <span className="font-mono text-[11px] text-primary">01 · Stage A</span>
           <p className="mt-1">List every personal and org repository, then read the git tree. Skip images, archives, lockfiles, build output, and blobs over 250 KB.</p>
         </li>
-        <li className="rounded-md border border-line bg-ink px-3 py-3">
+        <li className="glass rounded-xl px-3 py-3">
           <span className="font-mono text-[11px] text-primary">02 · Stage B</span>
           <p className="mt-1">Fetch only package manifests, config hooks, workflows, editor tasks, and suspicious scripts. One batched GraphQL query per repository.</p>
         </li>
-        <li className="rounded-md border border-line bg-ink px-3 py-3">
+        <li className="glass rounded-xl px-3 py-3">
           <span className="font-mono text-[11px] text-primary">03 · Stage C</span>
           <p className="mt-1">Match campaign runners and obfuscated tails. Preview the exact diff, then land the cleanup in a single commit.</p>
         </li>
@@ -722,7 +763,8 @@ function Empty({
 
 function Shield() {
   return (
-    <svg viewBox="0 0 24 24" className="h-6 w-6 shrink-0 text-primary" aria-hidden="true">
+    <span className="mark">
+    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" aria-hidden="true">
       <path
         d="M12 3 19.5 6v5.8c0 4.4-3.1 7.6-7.5 9.7C7.6 19.4 4.5 16.2 4.5 11.8V6L12 3Z"
         fill="none"
@@ -731,6 +773,7 @@ function Shield() {
       />
       <path d="M8.5 12.1 10.8 14.4 15.5 9.6" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
+    </span>
   );
 }
 

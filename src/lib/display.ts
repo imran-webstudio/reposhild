@@ -27,6 +27,27 @@ export function formatElapsed(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+export function repoWebUrl(repo: { htmlUrl?: string | null; fullName: string }): string {
+  if (repo.htmlUrl) return repo.htmlUrl;
+  return `https://github.com/${repo.fullName}`;
+}
+
+export function githubFileUrl(
+  repo: { htmlUrl?: string | null; fullName: string; defaultBranch?: string | null },
+  path: string,
+  line?: number,
+): string {
+  const base = repoWebUrl(repo).replace(/\/$/, "");
+  const branch = encodeURIComponent(repo.defaultBranch || "HEAD");
+  const encodedPath = path
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  const hash = line && line > 0 ? `#L${line}` : "";
+  return `${base}/blob/${branch}/${encodedPath}${hash}`;
+}
+
 export function formatWhen(iso: string | null): string {
   if (!iso) return "—";
   const date = new Date(iso);
