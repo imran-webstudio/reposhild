@@ -11,7 +11,7 @@ const LINKS = [
 export function LockdownBanner({ signal }: { signal: LockdownSignal }) {
   if (!signal.active) return null;
   return (
-    <section data-testid="lockdown-banner" className="border-b border-accent/50 bg-accent/10 text-bone">
+    <section data-testid="lockdown-banner" className="bg-accent/10 text-bone">
       <div className="mx-auto flex max-w-[1200px] flex-col gap-3 px-4 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex gap-2">
           <WarningIcon />

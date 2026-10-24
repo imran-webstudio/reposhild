@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CleanupLoader } from "@/components/cleanup-loader";
 import { DiffView } from "@/components/diff-view";
-import { STRATEGY_LABEL } from "@/lib/display";
+import { githubFileUrl, repoWebUrl, STRATEGY_LABEL } from "@/lib/display";
 import { planRemediation } from "@/lib/sanitizer";
 import type { RemediationResult, ScannedRepo } from "@/lib/scanner/types";
 
@@ -26,6 +26,10 @@ export function RemediationDrawer({
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const matched = notice && notice.owner === repo.owner && notice.name === repo.name ? notice : null;
+  const primaryFinding = repo.findings[0];
+  const githubHref = primaryFinding
+    ? githubFileUrl(repo, primaryFinding.path, primaryFinding.line)
+    : repoWebUrl(repo);
 
   useEffect(() => {
     const node = dialogRef.current;
@@ -77,7 +81,7 @@ export function RemediationDrawer({
       <button
         type="button"
         aria-label="Close review"
-        className="absolute inset-0 cursor-pointer bg-black/75 backdrop-blur-sm"
+        className="absolute inset-0 cursor-pointer bg-[#04110c]/28 backdrop-blur-[2px]"
         disabled={pending !== null}
         onClick={() => {
           if (!pending) onClose();
@@ -90,15 +94,10 @@ export function RemediationDrawer({
         aria-labelledby="review-title"
         aria-busy={pending !== null}
         tabIndex={-1}
-        className="modal-arrive relative flex max-h-[min(92vh,860px)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-drawer outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        className="modal-arrive modal-glass relative flex max-h-[min(92vh,860px)] w-full max-w-4xl flex-col overflow-hidden rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
-        <div className="h-px bg-primary" aria-hidden="true" />
-        {pending && (
-          <CleanupLoader
-            title={pending === "pr" ? "Opening a fix pull request" : "Removing malware"}
-            detail={`${repo.fullName} · writing one commit`}
-          />
-        )}
+        <div className="h-0.5 bg-[var(--site-green-dark)]" aria-hidden="true" />
+        <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${pending ? "modal-content-busy" : ""}`}>
         <header className="border-b border-line px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
@@ -113,6 +112,14 @@ export function RemediationDrawer({
                 <span>
                   {repo.findings.length} finding{repo.findings.length === 1 ? "" : "s"}
                 </span>
+                <a
+                  href={githubHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
+                  Open on GitHub
+                </a>
                 {repo.warnings && repo.warnings.length > 0 ? <span>{repo.warnings[0]}</span> : null}
               </p>
             </div>
@@ -153,13 +160,20 @@ export function RemediationDrawer({
             <h3 className="text-xs font-medium uppercase tracking-[0.14em] text-mist">Threats</h3>
             <ul className="mt-3 space-y-3">
               {repo.findings.map((finding) => (
-                <li key={finding.id} className="rounded-md border border-line bg-ink p-3">
+                <li key={finding.id} className="glass rounded-xl p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Severity finding={finding.severity} />
                     <span className="text-sm text-bone">{finding.rule}</span>
                   </div>
                   <p className="mt-2 font-mono text-[12px] text-mist">
-                    {finding.path}:{finding.line}
+                    <a
+                      href={githubFileUrl(repo, finding.path, finding.line)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    >
+                      {finding.path}:{finding.line}
+                    </a>
                   </p>
                   <p className="mt-2 text-sm leading-5 text-bone/90">{finding.message}</p>
                   <p className="mt-2 text-xs text-mist">{STRATEGY_LABEL[finding.strategy]}</p>
@@ -168,7 +182,7 @@ export function RemediationDrawer({
                   )}
                   <pre
                     data-testid="revealed-snippet"
-                    className="mt-2 overflow-x-auto rounded-md border border-line bg-ink p-3 font-mono text-xs leading-5 text-accent"
+                    className="mt-2 overflow-x-auto rounded-md border border-white/10 bg-black/25 p-3 font-mono text-xs leading-5 text-accent"
                   >
                     {(finding.hiddenPadding ? finding.revealed : finding.snippet).slice(0, 700)}
                   </pre>
@@ -210,7 +224,14 @@ export function RemediationDrawer({
                 {plan.map((change) => (
                   <div key={change.path}>
                     <div className="mb-2 flex items-center justify-between gap-3">
-                      <p className="font-mono text-[12px] text-bone">{change.path}</p>
+                      <a
+                        href={githubFileUrl(repo, change.path)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-sm font-mono text-[12px] text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      >
+                        {change.path}
+                      </a>
                       <span className="font-mono text-[10px] uppercase tracking-wider text-mist">
                         {change.action === "delete" ? "Delete" : "Modify"}
                       </span>
@@ -223,7 +244,7 @@ export function RemediationDrawer({
           </section>
         </div>
 
-        <footer className="border-t border-line bg-ink/40 px-5 py-4">
+        <footer className="border-t border-white/10 bg-black/20 px-5 py-4">
           <p className="font-mono text-[11px] text-mist">
             chore(security): remove malicious payload and sanitize scripts
           </p>
@@ -258,6 +279,13 @@ export function RemediationDrawer({
             </button>
           </div>
         </footer>
+        </div>
+        {pending && (
+          <CleanupLoader
+            title={pending === "pr" ? "Opening a fix pull request" : "Removing malware"}
+            detail={`${repo.fullName} · writing one commit`}
+          />
+        )}
       </div>
     </div>
   );
