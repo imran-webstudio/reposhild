@@ -18,6 +18,7 @@ export async function remediateRepository(
   owner: string,
   repo: string,
   mode: "commit" | "pr",
+  expectedHeadSha?: string,
 ): Promise<RemediationResult> {
   try {
     const scanned = await inspectOwnerRepo(octokit, owner, repo);
@@ -28,6 +29,15 @@ export async function remediateRepository(
       throw new CleanError(scanned.skippedReason ?? "The repository has nothing to scan.");
     }
 
+    if (!scanned.headSha || scanned.warnings?.length) {
+      throw new CleanError("Scan coverage is incomplete. Scan the repository again before cleaning.", 409);
+    }
+    if (expectedHeadSha && expectedHeadSha !== scanned.headSha) {
+      throw new CleanError("The repository changed since your preview. Scan again to review the current changes.", 409);
+    }
+    const snapshot = await readHead(octokit, owner, repo, scanned.defaultBranch);
+    if (snapshot.sha !== scanned.headSha) throw new CleanError("The repository changed during scanning. Please scan again.", 409);
+
     const changes = planRemediation(scanned.files, scanned.findings);
     if (changes.length === 0) {
       throw new CleanError("Nothing to clean. Those findings do not have an automatic fix.");
@@ -37,7 +47,7 @@ export async function remediateRepository(
     const base = scanned.defaultBranch;
 
     if (mode === "pr") {
-      const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes);
+      const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
       return result({
         owner,
         repo,
@@ -52,7 +62,7 @@ export async function remediateRepository(
     }
 
     try {
-      const commitSha = await writeCommit(octokit, owner, repo, base, changes);
+      const commitSha = await writeCommit(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
       return result({
         owner,
         repo,
@@ -67,7 +77,7 @@ export async function remediateRepository(
     } catch (error) {
       const status = httpStatus(error);
       if (status !== 422 && status !== 403) throw error;
-      const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes);
+      const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
       return result({
         owner,
         repo,
@@ -109,13 +119,16 @@ async function writeCommit(
   repo: string,
   branch: string,
   changes: FileChange[],
+  head: Head,
+  fileModes?: Record<string, string>,
 ): Promise<string> {
-  const head = await readHead(octokit, owner, repo, branch);
+  const current = await readHead(octokit, owner, repo, branch);
+  if (current.sha !== head.sha) throw new CleanError("The repository changed. Scan again before cleaning.", 409);
   try {
     return await graphqlCommit(octokit, owner, repo, branch, head.sha, changes);
   } catch (error) {
     try {
-      return await gitDataCommit(octokit, owner, repo, branch, head, changes);
+      return await gitDataCommit(octokit, owner, repo, branch, head, changes, fileModes);
     } catch (second) {
       throw wrapWriteError(second, owner, repo);
     }
@@ -128,8 +141,9 @@ async function commitOnNewBranchAndOpenPr(
   repo: string,
   base: string,
   changes: FileChange[],
+  head: Head,
+  fileModes?: Record<string, string>,
 ): Promise<{ branch: string; url: string; commitSha: string }> {
-  const head = await readHead(octokit, owner, repo, base);
   const branch = `reposhield/sanitize-${Date.now().toString(36)}`;
   try {
     await octokit.rest.git.createRef({
@@ -141,7 +155,7 @@ async function commitOnNewBranchAndOpenPr(
   } catch (error) {
     throw wrapWriteError(error, owner, repo);
   }
-  const commitSha = await writeCommit(octokit, owner, repo, branch, changes);
+  const commitSha = await writeCommit(octokit, owner, repo, branch, changes, head, fileModes);
   const pull = await octokit.rest.pulls.create({
     owner,
     repo,
@@ -212,13 +226,14 @@ async function gitDataCommit(
   branch: string,
   head: Head,
   changes: FileChange[],
+  fileModes?: Record<string, string>,
 ): Promise<string> {
   const tree = [];
   for (const change of changes) {
     if (change.action === "delete" || change.after == null) {
       tree.push({
         path: change.path,
-        mode: "100644" as TreeMode,
+        mode: (fileModes?.[change.path] ?? "100644") as TreeMode,
         type: "blob" as const,
         sha: null,
       });
@@ -232,7 +247,7 @@ async function gitDataCommit(
     });
     tree.push({
       path: change.path,
-      mode: "100644" as TreeMode,
+      mode: (fileModes?.[change.path] ?? "100644") as TreeMode,
       type: "blob" as const,
       sha: blob.data.sha,
     });

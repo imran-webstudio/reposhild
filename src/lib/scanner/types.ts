@@ -43,6 +43,8 @@ export interface ScannedRepo {
   fork: boolean;
   isOrg: boolean;
   defaultBranch: string;
+  headSha?: string;
+  fileModes?: Record<string, string>;
   pushedAt: string | null;
   lastCommitter: string | null;
   htmlUrl: string;

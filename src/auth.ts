@@ -1,3 +1,5 @@
+import { isAdminGitHubId } from "@/lib/admin/access";
+import { recordActivity } from "@/lib/activity";
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
 import { profileFromGitHub, rememberUser } from "@/lib/persistence/history";
@@ -44,16 +46,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     session({ session, token }) {
       if (session.user && typeof token.login === "string") {
         session.user.login = token.login;
+        session.user.githubId = typeof token.githubId === "string" ? token.githubId : undefined;
+        session.user.isAdmin = isAdminGitHubId(session.user.githubId);
       }
       return session;
     },
   },
   events: {
+    async signOut(message) {
+      if ("token" in message && typeof message.token?.githubId === "string") {
+        await recordActivity(message.token.githubId, "sign_out");
+      }
+    },
     async signIn({ profile }) {
       const github = profileFromGitHub(profile);
       if (!github) return;
       try {
         await rememberUser(github);
+        await recordActivity(github.githubId, "sign_in");
       } catch (error) {
         console.error("Could not store the signed-in account", error);
       }

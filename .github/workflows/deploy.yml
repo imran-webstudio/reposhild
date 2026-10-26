@@ -27,6 +27,9 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Check project integrity
+        run: node scripts/check-integrity.mjs
+
       - name: Install dependencies
         run: npm ci
 

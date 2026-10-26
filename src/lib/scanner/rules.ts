@@ -1,3 +1,4 @@
+import { parseJsonc } from "@/lib/scanner/jsonc";
 import {
   basename,
   editConfigLine,
@@ -203,9 +204,9 @@ function detectGitignore(path: string, text: string): Finding[] {
 }
 
 function detectTasks(path: string, text: string): Finding[] {
-  let parsed: { tasks?: Array<{ label?: string; runOn?: string; command?: string; script?: string }> };
+  let parsed: { tasks?: Array<{ label?: string; runOn?: string; runOptions?: { runOn?: string }; command?: string; script?: string }> };
   try {
-    parsed = JSON.parse(text);
+    parsed = parseJsonc(text);
   } catch {
     return [
       makeFinding({
@@ -224,7 +225,7 @@ function detectTasks(path: string, text: string): Finding[] {
 
   const findings: Finding[] = [];
   for (const task of parsed.tasks) {
-    if (task?.runOn !== "folderOpen") continue;
+    if (task?.runOptions?.runOn !== "folderOpen" && task?.runOn !== "folderOpen") continue;
     const label = task.label ?? task.command ?? task.script ?? "task";
     const at = text.indexOf('"folderOpen"');
     findings.push(

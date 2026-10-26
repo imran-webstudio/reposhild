@@ -19,6 +19,7 @@ export async function getGitHubToken(req: Request): Promise<GitHubSession | null
   const secureCookie = forwarded ? forwarded.split(",")[0]?.trim() === "https" : process.env.NODE_ENV === "production";
   const jwt = await getToken({ req, secret, secureCookie });
   if (!jwt || typeof jwt.accessToken !== "string" || jwt.accessToken.length === 0) return null;
+  if (typeof jwt.githubId !== "string" || !/^\d+$/.test(jwt.githubId)) return null;
   if (typeof jwt.expiresAt === "number" && jwt.expiresAt * 1000 < Date.now()) return null;
   return {
     token: jwt.accessToken,
