@@ -294,6 +294,12 @@ export function Dashboard() {
   }
 
   function absorb(result: RemediationResult) {
+    if (result.mode === "pr") {
+      setNotice(result);
+      setToast("Fix PR opened. Findings remain until the fix is merged and the repository is scanned again.");
+      void refreshHistory();
+      return;
+    }
     const fullName = `${result.owner}/${result.name}`;
     setRepos((current) =>
       current.map((repo) => {
@@ -357,6 +363,7 @@ export function Dashboard() {
             >
               {lightTheme ? "Dark" : "Light"}
             </button>
+            {session?.user?.isAdmin && <a href="/admin" className="btn-ghost">Admin</a>}
             <Account login={login} status={status} />
             <button
               type="button"

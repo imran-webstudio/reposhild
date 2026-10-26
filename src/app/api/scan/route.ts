@@ -1,3 +1,4 @@
+import { isSameOriginWrite } from "@/lib/github/request-origin";
 import { isAbortError, publicError } from "@/lib/github/errors";
 import { detectLockdown } from "@/lib/github/lockdown";
 import { createOctokit, readRateLimit, scanRepositories } from "@/lib/github/scanner";
@@ -11,6 +12,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
+  if (!isSameOriginWrite(req)) return Response.json({ error: "A same-origin JSON request is required." }, { status: 403 });
   const session = await getGitHubToken(req);
   if (!session) {
     return Response.json({ error: "Sign in with GitHub to scan your repositories." }, { status: 401 });

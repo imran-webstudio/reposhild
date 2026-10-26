@@ -1,3 +1,4 @@
+import { recordActivity } from "@/lib/activity";
 import type { Prisma } from "@prisma/client";
 import { getPrisma } from "@/lib/db";
 import type { RemediationSummary, ScanSummary, StoredScanStatus } from "@/lib/history";
@@ -29,22 +30,22 @@ export function profileFromGitHub(profile: unknown): AccountProfile | null {
 /** GitHub access tokens are never written. Only the public account identity is stored. */
 export async function rememberUser(profile: AccountProfile) {
   const db = getPrisma();
-  if (!db || !profile.login) return null;
-  return db.user.upsert({
-    where: { login: profile.login },
-    create: {
+  if (!db || !profile.login || !profile.githubId || !/^\d+$/.test(profile.githubId)) return null;
+  const githubId = profile.githubId;
+  return db.$transaction(async (tx) => {
+    const existing = await tx.user.findUnique({ where: { githubId } });
+    const occupied = await tx.user.findUnique({ where: { login: profile.login } });
+    // Never attach history by username: preserve displaced and unverified legacy accounts separately.
+    if (occupied && occupied.id !== existing?.id) {
+      await tx.user.update({ where: { id: occupied.id }, data: { login: `retired:${occupied.id}` } });
+    }
+    const data = {
       login: profile.login,
-      githubId: profile.githubId || null,
       name: profile.name || null,
       email: profile.email || null,
       avatarUrl: profile.avatarUrl || null,
-    },
-    update: {
-      ...(profile.githubId ? { githubId: profile.githubId } : {}),
-      ...(profile.name ? { name: profile.name } : {}),
-      ...(profile.email ? { email: profile.email } : {}),
-      ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}),
-    },
+    };
+    return tx.user.upsert({ where: { githubId }, create: { githubId, ...data }, update: data });
   });
 }
 
@@ -70,6 +71,7 @@ export async function beginScan(
       rateLimit: input.rateLimit,
     },
   });
+  await recordActivity(profile.githubId, "scan_started", "success", scan.id);
   return scan.id;
 }
 
@@ -95,6 +97,7 @@ export async function saveScannedRepo(scanId: string, repo: ScannedRepo): Promis
       fork: repo.fork,
       isOrg: repo.isOrg,
       defaultBranch: repo.defaultBranch,
+      headSha: repo.headSha ?? null,
       pushedAt: pushedAt && !Number.isNaN(pushedAt.getTime()) ? pushedAt : null,
       lastCommitter: repo.lastCommitter,
       htmlUrl: repo.htmlUrl,
@@ -164,12 +167,15 @@ export async function finishScan(
       ...(input.rateLimit != null ? { rateLimit: input.rateLimit } : {}),
     },
   });
+  const account = await db.scan.findUnique({ where: { id: scanId }, select: { user: { select: { githubId: true } } } });
+  await recordActivity(account?.user.githubId, "scan_finished", input.status === "COMPLETED" ? "success" : input.status === "ABORTED" ? "aborted" : "failure", scanId);
+
 }
 
-export async function listHistory(login: string): Promise<{ scans: ScanSummary[]; remediations: RemediationSummary[] }> {
+export async function listHistory(githubId: string): Promise<{ scans: ScanSummary[]; remediations: RemediationSummary[] }> {
   const db = getPrisma();
-  if (!db || !login) return { scans: [], remediations: [] };
-  const user = await db.user.findUnique({ where: { login } });
+  if (!db || !githubId) return { scans: [], remediations: [] };
+  const user = await db.user.findUnique({ where: { githubId } });
   if (!user) return { scans: [], remediations: [] };
   const [scans, remediations] = await Promise.all([
     db.scan.findMany({
@@ -198,11 +204,11 @@ export async function listHistory(login: string): Promise<{ scans: ScanSummary[]
   };
 }
 
-export async function readScan(login: string, scanId: string): Promise<{ scan: ScanSummary; repos: ScannedRepo[] } | null> {
+export async function readScan(githubId: string, scanId: string): Promise<{ scan: ScanSummary; repos: ScannedRepo[] } | null> {
   const db = getPrisma();
-  if (!db || !login) return null;
+  if (!db || !githubId) return null;
   const scan = await db.scan.findFirst({
-    where: { id: scanId, user: { login } },
+    where: { id: scanId, user: { githubId } },
     include: {
       repos: {
         include: { findings: true, files: true },
@@ -217,10 +223,10 @@ export async function readScan(login: string, scanId: string): Promise<{ scan: S
   };
 }
 
-export async function recordRemediation(login: string, scanId: string | null, result: RemediationResult): Promise<void> {
+export async function recordRemediation(githubId: string, scanId: string | null, result: RemediationResult): Promise<void> {
   const db = getPrisma();
-  if (!db || !login) return;
-  const user = await db.user.findUnique({ where: { login } });
+  if (!db || !githubId) return;
+  const user = await db.user.findUnique({ where: { githubId } });
   if (!user) return;
   await db.remediation.create({
     data: {
@@ -238,7 +244,7 @@ export async function recordRemediation(login: string, scanId: string | null, re
       changes: result.changes as unknown as Prisma.InputJsonValue,
     },
   });
-  if (!scanId) return;
+  if (!scanId || result.mode === "pr") return;
 
   const repo = await db.scanRepo.findFirst({
     where: { scanId, owner: result.owner, name: result.name, scan: { userId: user.id } },
@@ -326,6 +332,7 @@ function toScannedRepo(repo: {
   fork: boolean;
   isOrg: boolean;
   defaultBranch: string;
+  headSha: string | null;
   pushedAt: Date | null;
   lastCommitter: string | null;
   htmlUrl: string;
@@ -361,6 +368,7 @@ function toScannedRepo(repo: {
     fork: repo.fork,
     isOrg: repo.isOrg,
     defaultBranch: repo.defaultBranch,
+    headSha: repo.headSha ?? undefined,
     pushedAt: repo.pushedAt ? repo.pushedAt.toISOString() : null,
     lastCommitter: repo.lastCommitter,
     htmlUrl: repo.htmlUrl,

@@ -15,10 +15,12 @@ model User {
   name         String?
   email        String?
   avatarUrl    String?
+  lastSeenAt   DateTime?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   scans        Scan[]
   remediations Remediation[]
+  activities   Activity[]
 }
 
 model Scan {
@@ -55,6 +57,7 @@ model ScanRepo {
   archived      Boolean
   fork          Boolean
   isOrg         Boolean
+  headSha       String?
   defaultBranch String
   pushedAt      DateTime?
   lastCommitter String?
@@ -126,4 +129,18 @@ enum ScanStatus {
   COMPLETED
   FAILED
   ABORTED
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  outcome   String
+  target    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt(sort: Desc), id])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([action, outcome, createdAt(sort: Desc)])
 }

@@ -5,8 +5,9 @@ WORKDIR /app
 RUN apk add --no-cache libc6-compat openssl
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
+COPY scripts/check-integrity.mjs ./scripts/check-integrity.mjs
 ENV DATABASE_URL="postgresql://reposhild:reposhild@localhost:5432/reposhild?schema=public"
-RUN npm ci
+RUN node scripts/check-integrity.mjs --manifests-only && npm ci
 
 FROM node:22-alpine AS builder
 WORKDIR /app
@@ -15,7 +16,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL="postgresql://reposhild:reposhild@localhost:5432/reposhild?schema=public"
-RUN npx prisma generate && npm run build
+RUN node scripts/check-integrity.mjs && npx prisma generate && npm run build
 
 FROM node:22-alpine AS migrator
 WORKDIR /prisma-cli

@@ -33,6 +33,7 @@ services:
       AUTH_GITHUB_ID: ${AUTH_GITHUB_ID:?Set AUTH_GITHUB_ID in .env}
       AUTH_GITHUB_SECRET: ${AUTH_GITHUB_SECRET:?Set AUTH_GITHUB_SECRET in .env}
       AUTH_URL: ${AUTH_URL:?Set AUTH_URL in .env}
+      ADMIN_GITHUB_IDS: ${ADMIN_GITHUB_IDS:-}
     healthcheck:
       test:
         [

@@ -42,6 +42,7 @@ export function BulkModal({
             owner: plan.repo.owner,
             name: plan.repo.name,
             mode: action,
+            expectedHeadSha: plan.repo.headSha,
             scanId,
           }),
         });

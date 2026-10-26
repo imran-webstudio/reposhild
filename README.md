@@ -58,3 +58,33 @@ The app container runs `prisma migrate deploy` before it listens. Postgres data 
 Pushes to `main` run the tests, build `your-dockerhub-user/reposhild`, and on the VPS log in to Docker Hub, pull that exact image, and wait until `/api/setup` is healthy. The workflow needs `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `VPS_HOST`, and `VPS_PASSWORD`. Pull requests only run the tests.
 
 The published image is the Next.js standalone server. It does not contain the TypeScript source, the test tools, or the full dependency tree. The Prisma query engine and migration CLI are the only extra runtime files, so the container can open Postgres and apply migrations. The process runs as a non-root user.
+
+## Administration
+
+Open `/admin` after signing in with an authorized GitHub account. The dashboard shows total users, users active in the last seven days, scan totals, and cleanup totals. The Users view supports name, username, and GitHub ID search, join-date filters, activity-status filters, and per-user activity. The Activity log supports user/repository search, action, outcome, and time filters. Both views paginate on the server.
+
+Set `ADMIN_GITHUB_IDS` to comma-separated **numeric GitHub account IDs**, not usernames. The authorized project owner `imran-webstudio` currently has ID `277946130`. Set this on the server as well as locally:
+
+```dotenv
+ADMIN_GITHUB_IDS=277946130
+```
+
+An empty allowlist grants nobody access. Both the page and `/api/admin` enforce the allowlist on the server. GitHub tokens, cookies, source-file text, and request bodies are never included in activity logs or admin responses. Activity records include sign-ins and sign-outs, scan starts and outcomes, viewed historical scans, and cleanup requests and outcomes. Fix PRs are pending work and do not clear default-branch findings until merged and rescanned.
+
+Apply the new database migration before using the dashboard:
+
+```bash
+npm run db:migrate
+```
+
+The migration adds activity records, last-activity timestamps, and scan revision IDs. It backfills existing scans and cleanups; past sign-ins, views, and failed cleanup attempts cannot be reconstructed. The Docker entrypoint applies migrations automatically on deployment. Unverified legacy users remain isolated and are never linked by username. After a username change, the permanent GitHub ID retains history; a displaced login is labeled `retired:<internal-id>`.
+
+Historical scans without a stored revision must be scanned again before cleanup. Cleanup checks the revision shown in the preview, pins every file read to that revision, and refuses writes if the branch changes. Unread files and truncated trees produce incomplete results, never a clean result.
+
+## Integrity checks and incident follow-up
+
+The root `api.js` runner and an obfuscated PostCSS tail were removed on 26 October 2026. Evidence copies from this workstation were preserved outside the runnable repository at `/tmp/reposhild-audit-evidence/` (temporary storage, not a permanent archive). The standalone `scripts/check-integrity.mjs` inspects the package scripts and executable build configurations as text before the development server, tests, or build starts. CI and Docker also run it before affected build steps. These targeted checks are a regression guard, not a general malware scanner.
+
+If this checkout or a previous affected image was executed, investigate the developer workstation and build runners, revoke exposed GitHub authorizations, and rotate accessible deployment, database, and application secrets from a trusted environment. Removing project files does not establish that those environments are clean. No credential rotation is performed automatically.
+
+Inter, Space Grotesk, and JetBrains Mono are bundled locally with their Open Font License files, so builds do not depend on Google Fonts network responses.

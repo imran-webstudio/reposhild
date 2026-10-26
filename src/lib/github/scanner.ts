@@ -2,7 +2,7 @@ import { Octokit } from "octokit";
 import pLimit from "p-limit";
 import { httpStatus } from "@/lib/github/errors";
 import { isHighRiskPath, shouldSkipBlob } from "@/lib/github/paths";
-import { analyzeRepositoryFiles, statusFor } from "@/lib/scanner/engine";
+import { analyzeRepositoryFiles } from "@/lib/scanner/engine";
 import type { FetchedFile, RateLimitSnapshot, ScannedRepo } from "@/lib/scanner/types";
 
 /** How many repositories hit GitHub at once. Each one is one tree call plus one GraphQL call. */
@@ -117,13 +117,18 @@ export async function inspectRemoteRepo(octokit: Octokit, repo: ListedRepo): Pro
   }
 
   try {
-    const loaded = await loadHighRiskFiles(octokit, repo.owner.login, repo.name, repo.default_branch);
+    const ref = await octokit.rest.git.getRef({ owner: repo.owner.login, repo: repo.name, ref: `heads/${repo.default_branch}` });
+    const headSha = ref.data.object.sha;
+    const loaded = await loadHighRiskFiles(octokit, repo.owner.login, repo.name, headSha);
     const analyzed = analyzeRepositoryFiles(loaded.files);
     return {
       ...base,
+      headSha,
+      fileModes: loaded.fileModes,
       lastCommitter: loaded.committer ?? base.lastCommitter,
       durationMs: Date.now() - started,
-      status: statusFor(analyzed.findings),
+      status: analyzed.findings.length > 0 ? "infected" : loaded.warnings.length > 0 ? "error" : "clean",
+      error: loaded.warnings.length > 0 ? "Scan coverage is incomplete. Resolve the warnings and scan again." : undefined,
       findings: analyzed.findings,
       files: analyzed.files,
       warnings: loaded.warnings,
@@ -152,7 +157,7 @@ async function loadHighRiskFiles(
   owner: string,
   repo: string,
   branch: string,
-): Promise<{ files: FetchedFile[]; committer: string | null; warnings: string[] }> {
+): Promise<{ files: FetchedFile[]; fileModes: Record<string, string>; committer: string | null; warnings: string[] }> {
   const tree = await octokit.rest.git.getTree({
     owner,
     repo,
@@ -166,21 +171,25 @@ async function loadHighRiskFiles(
   }
 
   const candidates: Array<{ path: string; size: number }> = [];
+  const fileModes: Record<string, string> = {};
   for (const item of tree.data.tree) {
     if (item.type !== "blob" || !item.path) continue;
     const size = item.size ?? 0;
     if (shouldSkipBlob(item.path, size)) continue;
     if (!isHighRiskPath(item.path, size)) continue;
     candidates.push({ path: item.path, size });
+    fileModes[item.path] = item.mode ?? "100644";
   }
 
-  const { texts, committer } = await fetchBlobs(octokit, owner, repo, candidates.map((item) => item.path));
+  const { texts, committer } = await fetchBlobs(octokit, owner, repo, candidates.map((item) => item.path), branch);
   const sizeByPath = new Map(candidates.map((item) => [item.path, item.size]));
   const files: FetchedFile[] = [];
   for (const [path, text] of texts) {
     files.push({ path, text, byteSize: sizeByPath.get(path) ?? text.length });
   }
-  return { files, committer, warnings };
+  const missing = candidates.filter((item) => !texts.has(item.path));
+  if (missing.length > 0) warnings.push(`${missing.length} file(s) could not be inspected: ${missing.slice(0, 5).map((item) => item.path).join(", ")}`);
+  return { files, fileModes, committer, warnings };
 }
 
 async function fetchBlobs(
@@ -188,6 +197,7 @@ async function fetchBlobs(
   owner: string,
   repo: string,
   paths: string[],
+  revision: string,
 ): Promise<{ texts: Map<string, string>; committer: string | null }> {
   const texts = new Map<string, string>();
   if (paths.length === 0) return { texts, committer: null };
@@ -195,7 +205,7 @@ async function fetchBlobs(
   for (let index = 0; index < paths.length; index += 20) chunks.push(paths.slice(index, index + 20));
 
   const portions = await Promise.all(
-    chunks.map((chunk, index) => fetchChunk(octokit, owner, repo, chunk, index === 0)),
+    chunks.map((chunk, index) => fetchChunk(octokit, owner, repo, chunk, index === 0, revision)),
   );
   let committer: string | null = null;
   for (const portion of portions) {
@@ -211,18 +221,19 @@ async function fetchChunk(
   repo: string,
   paths: string[],
   withAuthor: boolean,
+  revision: string,
 ): Promise<{ texts: Map<string, string>; committer: string | null }> {
   try {
-    return await queryBlobs(octokit, owner, repo, paths, withAuthor);
+    return await queryBlobs(octokit, owner, repo, paths, withAuthor, revision);
   } catch {
     if (paths.length > 1) {
       const mid = Math.ceil(paths.length / 2);
-      const left = await fetchChunk(octokit, owner, repo, paths.slice(0, mid), withAuthor);
-      const right = await fetchChunk(octokit, owner, repo, paths.slice(mid), false);
+      const left = await fetchChunk(octokit, owner, repo, paths.slice(0, mid), withAuthor, revision);
+      const right = await fetchChunk(octokit, owner, repo, paths.slice(mid), false, revision);
       for (const [path, text] of right.texts) left.texts.set(path, text);
       return { texts: left.texts, committer: left.committer ?? right.committer };
     }
-    const text = await fetchBlobRest(octokit, owner, repo, paths[0]);
+    const text = await fetchBlobRest(octokit, owner, repo, paths[0], revision);
     const texts = new Map<string, string>();
     if (text != null) texts.set(paths[0], text);
     return { texts, committer: null };
@@ -235,8 +246,9 @@ async function queryBlobs(
   repo: string,
   paths: string[],
   withAuthor: boolean,
+  revision: string,
 ): Promise<{ texts: Map<string, string>; committer: string | null }> {
-  const query = blobQuery(paths, withAuthor);
+  const query = blobQuery(paths, withAuthor, revision);
   const data = await octokit.graphql<{ repository: Record<string, unknown> | null }>(query, {
     owner,
     name: repo,
@@ -250,10 +262,10 @@ async function queryBlobs(
   return { texts, committer: withAuthor ? readCommitter(repository ?? null) : null };
 }
 
-function blobQuery(paths: string[], withAuthor: boolean): string {
+function blobQuery(paths: string[], withAuthor: boolean, revision: string): string {
   const fields = paths
     .map((filePath, index) => {
-      const expression = graphqlString(`HEAD:${filePath}`);
+      const expression = graphqlString(`${revision}:${filePath}`);
       return `b${index}: object(expression: "${expression}") { ... on Blob { text byteSize isBinary } }`;
     })
     .join("\n");
@@ -268,9 +280,9 @@ function blobQuery(paths: string[], withAuthor: boolean): string {
   }`;
 }
 
-async function fetchBlobRest(octokit: Octokit, owner: string, repo: string, path: string): Promise<string | null> {
+async function fetchBlobRest(octokit: Octokit, owner: string, repo: string, path: string, revision: string): Promise<string | null> {
   try {
-    const response = await octokit.rest.repos.getContent({ owner, repo, path });
+    const response = await octokit.rest.repos.getContent({ owner, repo, path, ref: revision });
     if (Array.isArray(response.data) || response.data.type !== "file" || !("content" in response.data)) return null;
     if (response.data.encoding === "base64" && response.data.content) {
       return Buffer.from(response.data.content.replace(/\n/g, ""), "base64").toString("utf8");

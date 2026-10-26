@@ -64,7 +64,7 @@ export function RemediationDrawer({
       const response = await fetch("/api/remediate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: repo.owner, name: repo.name, mode: action, scanId }),
+        body: JSON.stringify({ owner: repo.owner, name: repo.name, mode: action, scanId, expectedHeadSha: repo.headSha }),
       });
       const body = (await response.json()) as RemediationResult & { error?: string };
       if (!response.ok) throw new Error(body.error || "Remediation failed");
@@ -132,7 +132,7 @@ export function RemediationDrawer({
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {matched && (
             <div className="rounded-md border border-primary/40 bg-primary/10 px-3 py-3 text-sm text-bone">
-              <p className="font-medium text-primary">Fix applied</p>
+              <p className="font-medium text-primary">{matched.mode === "pr" ? "Fix PR pending merge" : "Fix applied"}</p>
               <p className="mt-1">{matched.message}</p>
               <p className="mt-2 font-mono text-[12px] text-bone">
                 {matched.commitSha}
