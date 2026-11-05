@@ -43,52 +43,66 @@ export async function remediateRepository(
       throw new CleanError("Nothing to clean. Those findings do not have an automatic fix.");
     }
 
-    await assertCanPush(octokit, owner, repo);
+    const wasArchived = await openForCleanup(octokit, owner, repo);
     const base = scanned.defaultBranch;
 
-    if (mode === "pr") {
-      const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
-      return result({
-        owner,
-        repo,
-        mode: "pr",
-        commitSha: opened.commitSha,
-        branch: opened.branch,
-        prUrl: opened.url,
-        fallbackToPr: false,
-        message: `Opened ${opened.url}`,
-        changes,
-      });
-    }
-
     try {
-      const commitSha = await writeCommit(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
-      return result({
-        owner,
-        repo,
-        mode: "commit",
-        commitSha,
-        branch: base,
-        prUrl: null,
-        fallbackToPr: false,
-        message: `Committed to ${base}.`,
-        changes,
-      });
+      if (mode === "pr") {
+        const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
+        return result({
+          owner,
+          repo,
+          mode: "pr",
+          commitSha: opened.commitSha,
+          branch: opened.branch,
+          prUrl: opened.url,
+          fallbackToPr: false,
+          message: wasArchived
+            ? `Opened ${opened.url}. The repository stays unarchived so the pull request can be merged.`
+            : `Opened ${opened.url}`,
+          changes,
+        });
+      }
+
+      try {
+        const commitSha = await writeCommit(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
+        const archivedAgain = wasArchived ? await restoreArchive(octokit, owner, repo) : true;
+        return result({
+          owner,
+          repo,
+          mode: "commit",
+          commitSha,
+          branch: base,
+          prUrl: null,
+          fallbackToPr: false,
+          message: commitMessage(base, wasArchived, archivedAgain, owner, repo),
+          changes,
+        });
+      } catch (error) {
+        const status = httpStatus(error);
+        if (status !== 422 && status !== 403) throw error;
+        const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
+        return result({
+          owner,
+          repo,
+          mode: "pr",
+          commitSha: opened.commitSha,
+          branch: opened.branch,
+          prUrl: opened.url,
+          fallbackToPr: true,
+          message: wasArchived
+            ? `Default branch is protected. Opened ${opened.url}. The repository stays unarchived so the pull request can be merged.`
+            : `Default branch is protected. Opened ${opened.url}`,
+          changes,
+        });
+      }
     } catch (error) {
-      const status = httpStatus(error);
-      if (status !== 422 && status !== 403) throw error;
-      const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
-      return result({
-        owner,
-        repo,
-        mode: "pr",
-        commitSha: opened.commitSha,
-        branch: opened.branch,
-        prUrl: opened.url,
-        fallbackToPr: true,
-        message: `Default branch is protected. Opened ${opened.url}`,
-        changes,
-      });
+      if (wasArchived && !(await restoreArchive(octokit, owner, repo))) {
+        const message = error instanceof Error ? error.message : "The cleanup failed.";
+        const status = error instanceof CleanError ? error.status : httpStatus(error) ?? 502;
+        throw new CleanError(`${message} The repository was unarchived and GitHub refused to archive it again.`, status);
+      }
+      throw error;
     }
   } catch (error) {
     if (error instanceof CleanError) throw error;
@@ -96,11 +110,9 @@ export async function remediateRepository(
   }
 }
 
-async function assertCanPush(octokit: Octokit, owner: string, repo: string): Promise<void> {
+/** Unarchive when needed. Returns true when this cleanup should archive the repository again. */
+async function openForCleanup(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
   const { data } = await octokit.rest.repos.get({ owner, repo });
-  if (data.archived) {
-    throw new CleanError(`${owner}/${repo} is archived. Unarchive it on GitHub before cleaning.`, 409);
-  }
   if (data.disabled) {
     throw new CleanError(`${owner}/${repo} is disabled, so GitHub will not accept a commit.`, 409);
   }
@@ -111,6 +123,37 @@ async function assertCanPush(octokit: Octokit, owner: string, repo: string): Pro
       403,
     );
   }
+  if (!data.archived) return false;
+  if (access && !access.admin) {
+    throw new CleanError(
+      `${owner}/${repo} is archived. Cleaning it unarchives the repository, writes the fix, and archives it again. The signed-in account needs admin access to do that.`,
+      403,
+    );
+  }
+  try {
+    await octokit.rest.repos.update({ owner, repo, archived: false });
+  } catch (error) {
+    throw new CleanError(
+      `${owner}/${repo} is archived, and GitHub refused to unarchive it. Admin access is required. ${publicError(error)}`,
+      403,
+    );
+  }
+  return true;
+}
+
+async function restoreArchive(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+  try {
+    await octokit.rest.repos.update({ owner, repo, archived: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commitMessage(branch: string, wasArchived: boolean, archivedAgain: boolean, owner: string, repo: string): string {
+  if (!wasArchived) return `Committed to ${branch}.`;
+  if (archivedAgain) return `Committed to ${branch}. The repository is archived again.`;
+  return `Committed to ${branch}. GitHub did not archive ${owner}/${repo} again, so it is still active.`;
 }
 
 async function writeCommit(
