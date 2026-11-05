@@ -2,18 +2,17 @@ import type { AutoFixStrategy, FileChange, Finding } from "@/lib/scanner/types";
 import { sanitizeConfigSource } from "@/lib/sanitizer/config";
 import { sanitizeGitignore } from "@/lib/sanitizer/gitignore";
 import { sanitizePackageJson } from "@/lib/sanitizer/package-json";
-import { sanitizeVscodeSettings, sanitizeVscodeTasks } from "@/lib/sanitizer/vscode";
+import { sanitizeVscodeSettings } from "@/lib/sanitizer/vscode";
 
 export { sanitizeConfigSource } from "@/lib/sanitizer/config";
 export { sanitizeGitignore } from "@/lib/sanitizer/gitignore";
 export { sanitizePackageJson } from "@/lib/sanitizer/package-json";
-export { sanitizeVscodeSettings, sanitizeVscodeTasks } from "@/lib/sanitizer/vscode";
+export { sanitizeVscodeSettings } from "@/lib/sanitizer/vscode";
 
 const APPLY: Partial<Record<AutoFixStrategy, (source: string) => string>> = {
   "sanitize-package-json": sanitizePackageJson,
   "sanitize-config-tail": sanitizeConfigSource,
   "sanitize-gitignore": sanitizeGitignore,
-  "sanitize-vscode-tasks": sanitizeVscodeTasks,
   "sanitize-vscode-settings": sanitizeVscodeSettings,
 };
 

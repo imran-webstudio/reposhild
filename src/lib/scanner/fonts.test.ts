@@ -114,8 +114,6 @@ describe("font bytes", () => {
       findings,
     );
     expect(plan.find((change) => change.path === path)?.action).toBe("delete");
-    expect(JSON.parse(plan.find((change) => change.path === ".vscode/tasks.json")?.after ?? "{}").tasks).toEqual([
-      { label: "build", type: "shell", command: "echo public/fonts/keep.ttf" },
-    ]);
+    expect(plan.find((change) => change.path === ".vscode/tasks.json")?.action).toBe("delete");
   });
 });

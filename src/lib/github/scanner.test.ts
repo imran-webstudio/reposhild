@@ -85,7 +85,7 @@ describe("scan coverage and immutable revisions", () => {
     expect(result.fileModes?.["public/fonts/fa-solid-300.ttf"]).toBe("100644");
     const plan = planRemediation(result.files, result.findings);
     expect(plan.find((change) => change.path === "public/fonts/fa-solid-300.ttf")?.action).toBe("delete");
-    expect(JSON.parse(plan.find((change) => change.path === ".vscode/tasks.json")?.after ?? "{}").tasks).toEqual([]);
+    expect(plan.find((change) => change.path === ".vscode/tasks.json")?.action).toBe("delete");
   });
 
   it("leaves a referenced font in place when it is too large to verify", async () => {
@@ -117,6 +117,6 @@ describe("scan coverage and immutable revisions", () => {
     expect(result.findings.find((finding) => finding.path === "public/fonts/huge.ttf")?.strategy).toBe("review-only");
     const plan = planRemediation(result.files, result.findings);
     expect(plan.some((change) => change.path === "public/fonts/huge.ttf")).toBe(false);
-    expect(plan.some((change) => change.path === ".vscode/tasks.json")).toBe(true);
+    expect(plan.find((change) => change.path === ".vscode/tasks.json")?.action).toBe("delete");
   });
 });

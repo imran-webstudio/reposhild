@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { planRemediation } from "@/lib/sanitizer";
 import { sanitizePackageJson } from "@/lib/sanitizer/package-json";
-import { sanitizeVscodeTasks } from "@/lib/sanitizer/vscode";
 import { detectFile } from "@/lib/scanner/rules";
 
  describe("cleanup safety regressions", () => {
@@ -22,7 +22,7 @@ import { detectFile } from "@/lib/scanner/rules";
     expect(clean).not.toMatch(/(?<!\r)\n/);
     expect(JSON.parse(clean).scripts.build).toBe("next build");
   });
-  it("finds and removes real VS Code runOptions tasks with JSONC comments and trailing commas", () => {
+  it("deletes tasks.json instead of editing the task list", () => {
     const source = `{
       // VS Code permits comments.
       "tasks": [
@@ -32,12 +32,16 @@ import { detectFile } from "@/lib/scanner/rules";
     }`;
     const findings = detectFile(".vscode/tasks.json", source);
     expect(findings).toHaveLength(1);
-    expect(findings[0].ruleId).toBe("vscode-folder-open:dropper");
-    expect(JSON.parse(sanitizeVscodeTasks(source)).tasks).toEqual([{ label: "test", command: "npm test" }]);
+    expect(findings[0].ruleId).toBe("vscode-tasks");
+    expect(findings[0].strategy).toBe("delete-file");
+    expect(planRemediation({ ".vscode/tasks.json": source }, findings)).toEqual([
+      expect.objectContaining({ path: ".vscode/tasks.json", action: "delete", after: null }),
+    ]);
   });
-  it("does not mistake comment-like strings for JSONC comments", () => {
+  it("deletes a tasks.json that only contains an ordinary task", () => {
     const source = '{"tasks":[{"label":"test","command":"echo https://example.invalid/*hello*/"}]}';
-    expect(detectFile(".vscode/tasks.json", source)).toEqual([]);
-    expect(sanitizeVscodeTasks(source)).toBe(source);
+    const findings = detectFile(".vscode/tasks.json", source);
+    expect(findings.map((finding) => finding.strategy)).toEqual(["delete-file"]);
+    expect(planRemediation({ ".vscode/tasks.json": source }, findings)[0]?.action).toBe("delete");
   });
 });

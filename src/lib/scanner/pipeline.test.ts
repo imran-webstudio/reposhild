@@ -139,7 +139,7 @@ describe("repository pipeline", () => {
         "package-script:postinstall",
         "config-tail",
         "obfuscated-dropper",
-        "vscode-folder-open:install hook",
+        "vscode-tasks",
         "gitignore-cloak",
       ]),
     );
@@ -155,10 +155,7 @@ describe("repository pipeline", () => {
     expect(postcss?.after).toContain("tailwindcss");
     expect(postcss?.after).not.toContain("_0x");
 
-    const tasks = plan.find((change) => change.path === ".vscode/tasks.json");
-    expect(JSON.parse(tasks?.after ?? "{}").tasks).toEqual([
-      { label: "test", type: "shell", command: "npm test" },
-    ]);
+    expect(plan.find((change) => change.path === ".vscode/tasks.json")?.action).toBe("delete");
 
     expect(plan.find((change) => change.path === "api.js")?.action).toBe("delete");
 

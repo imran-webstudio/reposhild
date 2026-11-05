@@ -1,5 +1,4 @@
 import { fontPreview, isRealFont } from "@/lib/scanner/fonts";
-import { parseJsonc } from "@/lib/scanner/jsonc";
 import {
   basename,
   editConfigLine,
@@ -205,44 +204,18 @@ function detectGitignore(path: string, text: string): Finding[] {
 }
 
 function detectTasks(path: string, text: string): Finding[] {
-  let parsed: { tasks?: Array<{ label?: string; runOn?: string; runOptions?: { runOn?: string }; command?: string; script?: string }> };
-  try {
-    parsed = parseJsonc(text);
-  } catch {
-    return [
-      makeFinding({
-        severity: "MEDIUM",
-        path,
-        line: 1,
-        rule: "Unreadable VS Code tasks",
-        ruleId: "vscode-tasks-parse",
-        strategy: "review-only",
-        message: "tasks.json is not valid JSON.",
-        rawLine: firstLine(text),
-      }),
-    ];
-  }
-  if (!Array.isArray(parsed.tasks)) return [];
-
-  const findings: Finding[] = [];
-  for (const task of parsed.tasks) {
-    if (task?.runOptions?.runOn !== "folderOpen" && task?.runOn !== "folderOpen") continue;
-    const label = task.label ?? task.command ?? task.script ?? "task";
-    const at = text.indexOf('"folderOpen"');
-    findings.push(
-      makeFinding({
-        severity: "CRITICAL",
-        path,
-        line: at >= 0 ? lineNumberAt(text, at) : 1,
-        rule: "VS Code folder-open task",
-        ruleId: `vscode-folder-open:${label}`,
-        strategy: "sanitize-vscode-tasks",
-        message: `Task "${label}" runs when the folder is opened. It will be removed.`,
-        rawLine: task.command ?? task.script ?? "runOn: folderOpen",
-      }),
-    );
-  }
-  return findings;
+  return [
+    makeFinding({
+      severity: "CRITICAL",
+      path,
+      line: 1,
+      rule: "VS Code tasks file",
+      ruleId: "vscode-tasks",
+      strategy: "delete-file",
+      message: ".vscode/tasks.json is not required to build or run the project. The file will be deleted.",
+      rawLine: firstLine(text),
+    }),
+  ];
 }
 
 function detectSettings(path: string, text: string): Finding[] {
