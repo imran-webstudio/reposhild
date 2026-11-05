@@ -1,3 +1,4 @@
+import { fontPreview, isRealFont } from "@/lib/scanner/fonts";
 import { parseJsonc } from "@/lib/scanner/jsonc";
 import {
   basename,
@@ -303,6 +304,34 @@ function detectScriptDropper(path: string, text: string): Finding[] {
       rawLine: firstLine(text),
     }),
   ];
+}
+
+export function detectFakeFont(path: string, bytes: Uint8Array): Finding | null {
+  if (isRealFont(bytes)) return null;
+  const preview = fontPreview(bytes);
+  return makeFinding({
+    severity: "CRITICAL",
+    path,
+    line: 1,
+    rule: "Disguised font file",
+    ruleId: "disguised-font",
+    strategy: "delete-file",
+    message: `${path} is referenced by a folder-open task and is not a font file. It will be deleted.`,
+    rawLine: firstLine(preview) || path,
+  });
+}
+
+export function unverifiedFontFinding(path: string, byteSize: number): Finding {
+  return makeFinding({
+    severity: "MEDIUM",
+    path,
+    line: 1,
+    rule: "Unverified font file",
+    ruleId: "disguised-font-unverified",
+    strategy: "review-only",
+    message: `${path} is referenced by a folder-open task and is too large (${byteSize} bytes) to verify. It was left in place.`,
+    rawLine: path,
+  });
 }
 
 function markerLine(text: string): number {

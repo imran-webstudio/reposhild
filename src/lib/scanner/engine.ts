@@ -5,8 +5,7 @@ export function analyzeRepositoryFiles(files: FetchedFile[]): {
   findings: Finding[];
   files: Record<string, string>;
 } {
-  const findings = files.flatMap((file) => detectFile(file.path, file.text, file.byteSize));
-  findings.sort(compareFindings);
+  const findings = sortFindings(files.flatMap((file) => detectFile(file.path, file.text, file.byteSize)));
   const relevant = new Set(findings.map((finding) => finding.path));
   const contents: Record<string, string> = {};
   for (const file of files) {
@@ -17,6 +16,10 @@ export function analyzeRepositoryFiles(files: FetchedFile[]): {
 
 export function statusFor(findings: Finding[]): RepoStatus {
   return findings.length > 0 ? "infected" : "clean";
+}
+
+export function sortFindings(findings: Finding[]): Finding[] {
+  return [...findings].sort(compareFindings);
 }
 
 const SEVERITY_RANK: Record<Finding["severity"], number> = {

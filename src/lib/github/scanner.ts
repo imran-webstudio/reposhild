@@ -2,8 +2,10 @@ import { Octokit } from "octokit";
 import pLimit from "p-limit";
 import { httpStatus } from "@/lib/github/errors";
 import { isHighRiskPath, shouldSkipBlob } from "@/lib/github/paths";
-import { analyzeRepositoryFiles } from "@/lib/scanner/engine";
-import type { FetchedFile, RateLimitSnapshot, ScannedRepo } from "@/lib/scanner/types";
+import { sortFindings, analyzeRepositoryFiles } from "@/lib/scanner/engine";
+import { folderOpenFontPaths, fontPreview, REFERENCED_FONT_BYTE_CAP } from "@/lib/scanner/fonts";
+import { detectFakeFont, unverifiedFontFinding } from "@/lib/scanner/rules";
+import type { FetchedFile, Finding, RateLimitSnapshot, ScannedRepo } from "@/lib/scanner/types";
 
 /** How many repositories hit GitHub at once. Each one is one tree call plus one GraphQL call. */
 const REPO_CONCURRENCY = 40;
@@ -121,16 +123,17 @@ export async function inspectRemoteRepo(octokit: Octokit, repo: ListedRepo): Pro
     const headSha = ref.data.object.sha;
     const loaded = await loadHighRiskFiles(octokit, repo.owner.login, repo.name, headSha);
     const analyzed = analyzeRepositoryFiles(loaded.files);
+    const findings = sortFindings([...analyzed.findings, ...loaded.fontFindings]);
     return {
       ...base,
       headSha,
       fileModes: loaded.fileModes,
       lastCommitter: loaded.committer ?? base.lastCommitter,
       durationMs: Date.now() - started,
-      status: analyzed.findings.length > 0 ? "infected" : loaded.warnings.length > 0 ? "error" : "clean",
+      status: findings.length > 0 ? "infected" : loaded.warnings.length > 0 ? "error" : "clean",
       error: loaded.warnings.length > 0 ? "Scan coverage is incomplete. Resolve the warnings and scan again." : undefined,
-      findings: analyzed.findings,
-      files: analyzed.files,
+      findings,
+      files: { ...analyzed.files, ...loaded.fontFiles },
       warnings: loaded.warnings,
     };
   } catch (error) {
@@ -152,12 +155,26 @@ export async function inspectRemoteRepo(octokit: Octokit, repo: ListedRepo): Pro
   }
 }
 
+interface TreeBlob {
+  path: string;
+  size: number;
+  mode: string;
+  sha: string;
+}
+
 async function loadHighRiskFiles(
   octokit: Octokit,
   owner: string,
   repo: string,
   branch: string,
-): Promise<{ files: FetchedFile[]; fileModes: Record<string, string>; committer: string | null; warnings: string[] }> {
+): Promise<{
+  files: FetchedFile[];
+  fileModes: Record<string, string>;
+  committer: string | null;
+  warnings: string[];
+  fontFindings: Finding[];
+  fontFiles: Record<string, string>;
+}> {
   const tree = await octokit.rest.git.getTree({
     owner,
     repo,
@@ -170,26 +187,86 @@ async function loadHighRiskFiles(
     warnings.push("Git tree was truncated by GitHub. Some deep paths were not scanned.");
   }
 
-  const candidates: Array<{ path: string; size: number }> = [];
-  const fileModes: Record<string, string> = {};
+  const blobs = new Map<string, TreeBlob>();
   for (const item of tree.data.tree) {
     if (item.type !== "blob" || !item.path) continue;
-    const size = item.size ?? 0;
-    if (shouldSkipBlob(item.path, size)) continue;
-    if (!isHighRiskPath(item.path, size)) continue;
-    candidates.push({ path: item.path, size });
-    fileModes[item.path] = item.mode ?? "100644";
+    blobs.set(item.path, {
+      path: item.path,
+      size: item.size ?? 0,
+      mode: item.mode ?? "100644",
+      sha: item.sha ?? "",
+    });
+  }
+
+  const candidates: TreeBlob[] = [];
+  const fileModes: Record<string, string> = {};
+  for (const blob of blobs.values()) {
+    if (shouldSkipBlob(blob.path, blob.size)) continue;
+    if (!isHighRiskPath(blob.path, blob.size)) continue;
+    candidates.push(blob);
+    fileModes[blob.path] = blob.mode;
   }
 
   const { texts, committer } = await fetchBlobs(octokit, owner, repo, candidates.map((item) => item.path), branch);
-  const sizeByPath = new Map(candidates.map((item) => [item.path, item.size]));
   const files: FetchedFile[] = [];
   for (const [path, text] of texts) {
-    files.push({ path, text, byteSize: sizeByPath.get(path) ?? text.length });
+    files.push({ path, text, byteSize: blobs.get(path)?.size ?? text.length });
   }
   const missing = candidates.filter((item) => !texts.has(item.path));
   if (missing.length > 0) warnings.push(`${missing.length} file(s) could not be inspected: ${missing.slice(0, 5).map((item) => item.path).join(", ")}`);
-  return { files, fileModes, committer, warnings };
+
+  const fonts = await inspectReferencedFonts(octokit, owner, repo, texts.get(".vscode/tasks.json"), blobs);
+  warnings.push(...fonts.warnings);
+  Object.assign(fileModes, fonts.modes);
+  return { files, fileModes, committer, warnings, fontFindings: fonts.findings, fontFiles: fonts.files };
+}
+
+async function inspectReferencedFonts(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  tasksText: string | undefined,
+  blobs: Map<string, TreeBlob>,
+): Promise<{ findings: Finding[]; files: Record<string, string>; modes: Record<string, string>; warnings: string[] }> {
+  const findings: Finding[] = [];
+  const files: Record<string, string> = {};
+  const modes: Record<string, string> = {};
+  const warnings: string[] = [];
+  if (!tasksText) return { findings, files, modes, warnings };
+
+  for (const path of folderOpenFontPaths(tasksText)) {
+    const blob = blobs.get(path);
+    if (!blob) continue;
+    if (blob.size > REFERENCED_FONT_BYTE_CAP) {
+      findings.push(unverifiedFontFinding(path, blob.size));
+      continue;
+    }
+    if (!blob.sha) {
+      warnings.push(`Could not read ${path}, which a folder-open task references.`);
+      continue;
+    }
+    const bytes = await fetchBlobBytes(octokit, owner, repo, blob.sha);
+    if (!bytes) {
+      warnings.push(`Could not read ${path}, which a folder-open task references.`);
+      continue;
+    }
+    const finding = detectFakeFont(path, bytes);
+    if (!finding) continue;
+    findings.push(finding);
+    files[path] = fontPreview(bytes);
+    modes[path] = blob.mode;
+  }
+  return { findings, files, modes, warnings };
+}
+
+async function fetchBlobBytes(octokit: Octokit, owner: string, repo: string, sha: string): Promise<Uint8Array | null> {
+  try {
+    const response = await octokit.rest.git.getBlob({ owner, repo, file_sha: sha });
+    if (response.data.encoding !== "base64" || response.data.content == null) return null;
+    return new Uint8Array(Buffer.from(response.data.content.replace(/\n/g, ""), "base64"));
+  } catch {
+    return null;
+  }
 }
 
 async function fetchBlobs(
