@@ -253,6 +253,11 @@ export function RemediationDrawer({
               ? "Nothing will be committed."
               : `${plan.length} file${plan.length === 1 ? "" : "s"} in one commit on ${repo.defaultBranch}.`}
           </p>
+          {repo.archived && plan.length > 0 && (
+            <p className="mt-1 text-xs text-mist">
+              This repository is archived. A commit unarchives it, writes the cleanup, and archives it again. A pull request leaves it unarchived so the pull request can be merged.
+            </p>
+          )}
           {error && (
             <p role="alert" className="mt-2 text-sm text-accent">
               {error}

@@ -4,8 +4,7 @@ out
 dist
 .DS_Store
 *.log
-.env
-.env.local
 .env*.local
 coverage
 .vercel
+config.bat

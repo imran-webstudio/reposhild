@@ -11,7 +11,7 @@ function client() {
     getRef: vi.fn().mockResolvedValue({ data: { object: { sha } } }),
     getCommit: vi.fn().mockResolvedValue({ data: { tree: { sha: "tree" } } }),
     createRef: vi.fn().mockResolvedValue({}), createTree: vi.fn(), createCommit: vi.fn(), updateRef: vi.fn(),
-  }, repos: { get: vi.fn().mockResolvedValue({ data: { permissions: { push: true } } }) }, pulls: { create: vi.fn().mockResolvedValue({ data: { html_url: "https://github.com/owner/demo/pull/1" } }) } }, graphql: vi.fn().mockResolvedValue({ createCommitOnBranch: { commit: { oid: "b".repeat(40) } } }) };
+  }, repos: { get: vi.fn().mockResolvedValue({ data: { permissions: { push: true } } }), update: vi.fn().mockResolvedValue({ data: {} }) }, pulls: { create: vi.fn().mockResolvedValue({ data: { html_url: "https://github.com/owner/demo/pull/1" } }) } }, graphql: vi.fn().mockResolvedValue({ createCommitOnBranch: { commit: { oid: "b".repeat(40) } } }) };
 }
 beforeEach(() => { vi.mocked(inspectOwnerRepo).mockResolvedValue(fixture); });
 describe("remediation revision safety", () => {
@@ -33,5 +33,39 @@ describe("remediation revision safety", () => {
   it("branches a fix PR from the scanned revision", async () => {
     const api = client(); const result = await remediateRepository(api as unknown as Octokit, "owner", "demo", "pr", sha);
     expect(result.mode).toBe("pr"); expect(api.rest.git.createRef).toHaveBeenCalledWith(expect.objectContaining({ sha }));
+  });
+  it("unarchives an archived repository, commits, and archives it again", async () => {
+    const api = client();
+    api.rest.repos.get.mockResolvedValue({ data: { archived: true, permissions: { admin: true, push: true } } });
+    const result = await remediateRepository(api as unknown as Octokit, "owner", "demo", "commit", sha);
+    expect(result.message).toContain("archived again");
+    expect(api.rest.repos.update).toHaveBeenNthCalledWith(1, { owner: "owner", repo: "demo", archived: false });
+    expect(api.graphql).toHaveBeenCalled();
+    expect(api.rest.repos.update).toHaveBeenNthCalledWith(2, { owner: "owner", repo: "demo", archived: true });
+  });
+  it("leaves an archived repository unarchived when the cleanup is a pull request", async () => {
+    const api = client();
+    api.rest.repos.get.mockResolvedValue({ data: { archived: true, permissions: { admin: true, push: true } } });
+    const result = await remediateRepository(api as unknown as Octokit, "owner", "demo", "pr", sha);
+    expect(result.mode).toBe("pr");
+    expect(result.message).toContain("stays unarchived");
+    expect(api.rest.repos.update).toHaveBeenCalledTimes(1);
+    expect(api.rest.repos.update).toHaveBeenCalledWith({ owner: "owner", repo: "demo", archived: false });
+  });
+  it("refuses an archived repository when the account is not an admin", async () => {
+    const api = client();
+    api.rest.repos.get.mockResolvedValue({ data: { archived: true, permissions: { push: true, admin: false } } });
+    await expect(remediateRepository(api as unknown as Octokit, "owner", "demo", "commit", sha)).rejects.toMatchObject({ status: 403 });
+    expect(api.rest.repos.update).not.toHaveBeenCalled();
+    expect(api.graphql).not.toHaveBeenCalled();
+  });
+  it("archives the repository again when the commit fails", async () => {
+    const api = client();
+    api.rest.repos.get.mockResolvedValue({ data: { archived: true, permissions: { admin: true, push: true } } });
+    api.graphql.mockRejectedValue(Object.assign(new Error("nope"), { status: 500 }));
+    api.rest.git.createBlob = vi.fn().mockRejectedValue(Object.assign(new Error("nope"), { status: 500 }));
+    await expect(remediateRepository(api as unknown as Octokit, "owner", "demo", "commit", sha)).rejects.toBeInstanceOf(Error);
+    expect(api.rest.repos.update).toHaveBeenNthCalledWith(1, { owner: "owner", repo: "demo", archived: false });
+    expect(api.rest.repos.update).toHaveBeenNthCalledWith(2, { owner: "owner", repo: "demo", archived: true });
   });
 });
