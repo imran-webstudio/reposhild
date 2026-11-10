@@ -100,6 +100,16 @@ function configHead(prefix: string): string | null {
   return null;
 }
 
+/** A tail hidden past a long space run, including packers that never spell eval or _0x. */
+function isHiddenPayload(hidden: string): boolean {
+  const trimmed = hidden.trim();
+  if (!trimmed) return false;
+  if (lineHasConfigMarker(trimmed)) return true;
+  if (isStructuralConfigLine(trimmed)) return false;
+  if (/\(function\s*\(\s*\)\s*\{\s*var\s+[A-Za-z_$][\w$]*\s*=\s*\[/.test(trimmed)) return true;
+  return /^(?:var|let|const|function)\b|^\(function\b/.test(trimmed) && trimmed.length > 240;
+}
+
 /**
  * Decide how a config line should be treated.
  * Padding-hidden or tail-appended obfuscation is removed.
@@ -109,7 +119,7 @@ export function editConfigLine(line: string): ConfigLineEdit {
   if (!line.trim()) return { kind: "keep" };
 
   const padAt = paddingIndex(line);
-  if (padAt >= 0 && lineHasConfigMarker(line.slice(padAt))) {
+  if (padAt >= 0 && isHiddenPayload(line.slice(padAt))) {
     const head = line.slice(0, padAt).trimEnd();
     return head ? { kind: "trim", text: head } : { kind: "drop" };
   }

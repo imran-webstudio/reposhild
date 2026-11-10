@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeConfigSource } from "@/lib/sanitizer/config";
 import { sanitizePackageJson } from "@/lib/sanitizer/package-json";
+import { detectFile } from "@/lib/scanner/rules";
 import vm from "node:vm";
 
 const INFECTED_PACKAGE_JSON = `{
@@ -120,6 +121,32 @@ describe("postcss config sanitizer", () => {
   it("does not rewrite a long config line that has no payload markers", () => {
     const source = `module.exports = { note: "${"a".repeat(520)}" };\n`;
     expect(sanitizeConfigSource(source)).toBe(source);
+  });
+
+  it("removes a padding-hidden packer that does not use eval or _0x", () => {
+    const payload = `var z = '-11052';var NX,SX,spin,splitLane,peel;(function(){var a=["","*","*0","^","*1","c^mejb^tro"];${"x".repeat(280)}`;
+    const source = `module.exports = {
+  content: ["./src/**/*.{js,ts,jsx,tsx}"],
+  theme: { extend: {} },
+  plugins: [],
+};${" ".repeat(80)}${payload}
+`;
+    const findings = detectFile("tailwind.config.js", source);
+    expect(findings.map((finding) => finding.strategy)).toEqual(["sanitize-config-tail"]);
+    expect(findings[0]?.hiddenPadding).toBe(true);
+    const cleaned = sanitizeConfigSource(source);
+    expect(cleaned).toBe(`module.exports = {
+  content: ["./src/**/*.{js,ts,jsx,tsx}"],
+  theme: { extend: {} },
+  plugins: [],
+};
+`);
+    expect(cleaned).not.toContain("splitLane");
+    expect(loadConfig(cleaned)).toEqual({
+      content: ["./src/**/*.{js,ts,jsx,tsx}"],
+      theme: { extend: {} },
+      plugins: [],
+    });
   });
 
   it("keeps the closing }; when a packer payload is jammed onto the same line", () => {
