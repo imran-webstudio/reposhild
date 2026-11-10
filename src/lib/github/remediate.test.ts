@@ -10,6 +10,7 @@ function client() {
   return { rest: { git: {
     getRef: vi.fn().mockResolvedValue({ data: { object: { sha } } }),
     getCommit: vi.fn().mockResolvedValue({ data: { tree: { sha: "tree" } } }),
+    createBlob: vi.fn(),
     createRef: vi.fn().mockResolvedValue({}), createTree: vi.fn(), createCommit: vi.fn(), updateRef: vi.fn(),
   }, repos: { get: vi.fn().mockResolvedValue({ data: { permissions: { push: true } } }), update: vi.fn().mockResolvedValue({ data: {} }) }, pulls: { create: vi.fn().mockResolvedValue({ data: { html_url: "https://github.com/owner/demo/pull/1" } }) } }, graphql: vi.fn().mockResolvedValue({ createCommitOnBranch: { commit: { oid: "b".repeat(40) } } }) };
 }
