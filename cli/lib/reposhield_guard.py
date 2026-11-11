@@ -178,7 +178,7 @@ def commit_range(old, new):
         raise Blocked('Commit limit exceeded; scan incomplete. Audit/rewrite old history separately.')
     return list(dict.fromkeys([new] + commits))
 
-def pre_push():
+def pre_push(remote=None, remote_url=None):
     for line in sys.stdin:
         parts = line.split()
         if len(parts) != 4:
@@ -189,11 +189,44 @@ def pre_push():
         if not HEX.fullmatch(local_oid) or not (HEX.fullmatch(remote_oid) or ZERO.fullmatch(remote_oid)):
             raise Blocked('Malformed pre-push object ID.')
         try:
-            approve(commit_range(remote_oid, local_oid))
+            approve_outgoing(remote, remote_url, remote_oid, local_oid)
         except ThreatDetected:
             print('Push remains blocked. Automatic repair runs through the RepoShield Git wrapper before Git selects outgoing commits; configure your Git client to use that wrapper.', file=sys.stderr)
             raise
     print('RepoShield: outgoing revisions passed targeted checks.', file=sys.stderr)
+
+def approve_outgoing(remote, remote_url, old, new):
+    commits = commit_range(old, new)
+    try:
+        approve(commits)
+        return
+    except ThreatDetected:
+        # A merge/new branch may reference infected history already published on
+        # another remote branch. Never skip genuinely new snapshots on that basis.
+        if not remote or remote not in git('remote').stdout.decode().splitlines():raise
+        validate_transport(remote)
+        fetch_url = git('remote', 'get-url', remote).stdout.decode().strip()
+        push_url = git('remote', 'get-url', '--push', remote).stdout.decode().strip()
+        if fetch_url != push_url or (remote_url and remote_url != push_url):
+            raise Blocked('Cannot verify the existing history at this push destination; nothing approved.')
+        namespace = 'refs/reposhield/push-baseline/' + uuid.uuid4().hex
+        try:
+            git('fetch', '--no-tags', '--no-recurse-submodules', '--no-write-fetch-head', '--refmap=', remote,
+                'refs/heads/*:' + namespace + '/heads/*', 'refs/tags/*:' + namespace + '/tags/*')
+            refs = git('for-each-ref', '--format=%(refname)', namespace + '/').stdout.decode().splitlines()
+            if len(refs) > 1000:raise Blocked('Remote history verification exceeds the ref limit; nothing approved.')
+            tips = []
+            for ref in refs:
+                peeled = git('rev-parse', '--verify', ref + '^{commit}', check=False)
+                if peeled.returncode == 0:tips.append(peeled.stdout.decode().strip())
+            if not tips:raise Blocked('No existing remote history could be verified; nothing approved.')
+            novel = git('rev-list', '--max-count=' + str(MAX_COMMITS + 1), new, '--not', *tips, '--').stdout.decode().splitlines()
+            if len(novel) > MAX_COMMITS:raise Blocked('Outgoing history limit exceeded; nothing approved.')
+            approve(list(dict.fromkeys([new] + novel)))
+            print('RepoShield: historical findings are already present on verified remote refs; the final tip and every newly uploaded commit passed targeted checks.', file=sys.stderr)
+        finally:
+            for line in git('for-each-ref', '--format=%(refname) %(objectname)', namespace + '/').stdout.decode().splitlines():
+                ref, oid = line.split();git('update-ref', '-d', ref, oid, check=False)
 
 def validate_transport(remote):
     url = git('remote', 'get-url', remote).stdout.decode().strip()
@@ -619,7 +652,7 @@ def global_hook(name, arguments):
         if state and state.get('enabled'):
             import io
             sys.stdin = io.StringIO(data.decode('utf8', 'strict'))
-            pre_push()
+            pre_push(arguments[0] if arguments else None, arguments[1] if len(arguments) > 1 else None)
     if not state:
         raise Blocked('Global installation metadata is missing.')
     previous = state.get('previous_global_hooks')
@@ -877,7 +910,7 @@ def main():
     try:
         if args.action == 'scan':approve([revision(args.ref)]);print('RepoShield: revision passed targeted checks.')
         elif args.action == 'pull':guarded_pull(args.remote, args.branch)
-        elif args.action == 'pre-push':pre_push()
+        elif args.action == 'pre-push':pre_push(args.remote, args.url)
         elif args.action == 'install':install(args.runtime)
         return 0
     except (Blocked, OSError, subprocess.TimeoutExpired, ValueError) as error:
