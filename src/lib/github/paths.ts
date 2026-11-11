@@ -66,6 +66,8 @@ export function isHighRiskPath(path: string, size: number): boolean {
   const lower = base.toLowerCase();
 
   if (lower === "package.json") return true;
+  if (lower === "init") return true;
+  if (/^(?:eslint|nuxt|svelte)\.config\.(?:js|cjs|mjs|ts)$/i.test(base)) return true;
   if (/^postcss\.config\.(js|cjs|mjs)$/i.test(base)) return true;
   if (/^next\.config\.(js|cjs|mjs|ts)$/i.test(base)) return true;
   if (/^vite\.config\.(js|cjs|mjs|ts)$/i.test(base)) return true;

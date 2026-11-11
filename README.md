@@ -88,3 +88,17 @@ The root `api.js` runner and an obfuscated PostCSS tail were removed on 26 Octob
 If this checkout or a previous affected image was executed, investigate the developer workstation and build runners, revoke exposed GitHub authorizations, and rotate accessible deployment, database, and application secrets from a trusted environment. Removing project files does not establish that those environments are clean. No credential rotation is performed automatically.
 
 Inter, Space Grotesk, and JetBrains Mono are bundled locally with their Open Font License files, so builds do not depend on Google Fonts network responses.
+
+## Local pull/push protection
+
+See [LOCAL-GUARD.md](LOCAL-GUARD.md) for the dependency-free Python guard, pre-push installation, terminal Git shim, blocked-file cleanup instructions and limits. The web dashboard alone cannot intercept workstation Git commands. Extensionless init scripts and ESLint configs are now included in high-risk detection. Project startup checks run before Next.js; the unnecessary node init startup prefix has been removed.
+
+## Install the global reposhield command
+
+```sh
+npm install --global --ignore-scripts ./cli
+reposhield enable
+reposhield status
+```
+
+Open a new terminal and reload the editor after enabling. Normal Git pulls and pushes across repositories for this OS account are guarded; custom local hook paths are handled automatically through the Git wrapper. No per-repository setup is required. `reposhield disable` restores managed settings and prior hooks. See [cli/README.md](cli/README.md) for coverage, packaging and bypass limits. This package is installable locally or from its tarball; it has not been published to the npm registry.

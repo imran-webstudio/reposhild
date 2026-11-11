@@ -3,15 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "node init && node scripts/check-integrity.mjs && next dev",
-    "build": "node init && node scripts/check-integrity.mjs && next build",
-    "start": "node init && node scripts/check-integrity.mjs && next start",
+    "dev": "node scripts/check-integrity.mjs && next dev",
+    "build": "node scripts/check-integrity.mjs && next build",
+    "start": "node scripts/check-integrity.mjs && next start",
     "test": "node scripts/check-integrity.mjs && vitest run",
     "test:watch": "node scripts/check-integrity.mjs && vitest",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
-    "check:integrity": "node scripts/check-integrity.mjs"
+    "check:integrity": "node scripts/check-integrity.mjs",
+    "test:git-guard": "python3 -B -m unittest discover -s scripts -p test_reposhield_guard.py",
+    "cli:sync": "python3 scripts/build-guard-package.py"
   },
   "dependencies": {
     "@prisma/client": "^6.16.2",
