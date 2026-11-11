@@ -1,0 +1,19 @@
+{
+  "name": "@imran-webstudio/reposhield-cli",
+  "version": "0.3.0",
+  "private": true,
+  "description": "RepoShield global Git pull/push protection for macOS and Linux",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "reposhield": "bin/reposhield.mjs"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

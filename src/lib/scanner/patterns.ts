@@ -161,6 +161,8 @@ export function isKnownDropperBasename(path: string): boolean {
 }
 
 export function isConfigPath(path: string): boolean {
+  if (/(?:^|\/)init$/i.test(path)) return true;
+  if (/(?:^|\/)(?:eslint|nuxt|svelte)\.config\.(?:js|cjs|mjs|ts)$/i.test(path)) return true;
   return /(?:^|\/)(?:postcss\.config\.(?:js|cjs|mjs)|next\.config\.(?:js|cjs|mjs|ts)|vite\.config\.(?:js|cjs|mjs|ts)|webpack\.config\.(?:js|cjs|mjs|ts)|tailwind\.config\.(?:js|cjs|mjs|ts))$/i.test(
     path,
   );

@@ -36,6 +36,9 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Test local Git guard
+        run: python3 -I -S -B -m unittest discover -s scripts -p test_reposhield_guard.py
+
       - name: Typecheck
         run: npx tsc --noEmit
 
