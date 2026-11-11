@@ -311,7 +311,8 @@ def guarded_pull(remote, branch, include_tags=False, expected_new=None):
         except ThreatDetected:
             if repair_enabled():pull_handoff(remote, branch, new)
             raise
-        if git('merge-base', '--is-ancestor', old, new, check=False).returncode:
+        ahead_only = git('merge-base', '--is-ancestor', new, old, check=False).returncode == 0
+        if not ahead_only and git('merge-base', '--is-ancestor', old, new, check=False).returncode:
             raise Blocked('Your local and remote branches have diverged. RepoShield only applies fast-forward pulls. Review both branches before merging/rebasing.')
         if revision('HEAD') != old or git('status', '--porcelain', '--untracked-files=all').stdout:
             raise Blocked('Repository changed during inspection; rerun the guarded pull.')
@@ -320,10 +321,10 @@ def guarded_pull(remote, branch, include_tags=False, expected_new=None):
             git('update-ref', '--stdin', data=transaction.encode())
             promoted = tags
         git('merge', '--ff-only', '--no-edit', '--no-autostash', new)
-        if revision('HEAD') != new:
+        if revision('HEAD') != (old if ahead_only else new):
             raise Blocked('Unexpected final HEAD; investigate concurrent Git activity.')
         completed = True
-        print('RepoShield: branch' + (' and requested tags' if include_tags else '') + ' passed targeted checks; fast-forward pull completed.')
+        print('RepoShield: branch' + (' and requested tags' if include_tags else '') + (' passed targeted checks; already up to date. Local commits remain ready to push.' if ahead_only else ' passed targeted checks; fast-forward pull completed.'))
     finally:
         if not completed:
             for ref, oid in promoted:
@@ -410,7 +411,7 @@ def repair_tree(commit):
     return tree, [p for p, _, _ in edits]
 
 def verified_repair(commit, require_marker=True):
-    """Recompute every changed byte; legacy receipts are optional for pull only."""
+    """Recompute every changed byte; legacy receipts are optional for verified cleanups."""
     raw = git('cat-file', 'commit', commit).stdout
     header, _, message = raw.partition(b'\n\n')
     parents = [line[7:].decode() for line in header.splitlines() if line.startswith(b'parent ')]
