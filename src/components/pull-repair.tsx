@@ -10,6 +10,7 @@ import type { PullPreview } from "@/lib/guard/pull";
 type Applied = { commitUrl: string; prUrl: string | null; message: string };
 export function PullRepair({ target }: { target: PullTarget | null }) {
   const { status } = useSession();
+  const [reauthenticate, setReauthenticate] = useState(false);
   const [preview, setPreview] = useState<PullPreview | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,6 +21,7 @@ export function PullRepair({ target }: { target: PullTarget | null }) {
     try {
       const response = await fetch("/api/guard/pull", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...target, action: "preview" }), signal });
       const body = await response.json();
+      if (response.status === 401) setReauthenticate(true);
       if (!response.ok) throw new Error(body.error || "Could not inspect this branch.");
       setPreview(body);
     } catch (cause) {
@@ -36,6 +38,7 @@ export function PullRepair({ target }: { target: PullTarget | null }) {
     try {
       const response = await fetch("/api/guard/pull", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...target, action }) });
       const body = await response.json();
+      if (response.status === 401) setReauthenticate(true);
       if (!response.ok) throw new Error(body.error || "Repair failed. A protected branch may require a repair PR.");
       setApplied(body);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Repair failed."); }
@@ -55,13 +58,13 @@ export function PullRepair({ target }: { target: PullTarget | null }) {
         <div><dt className="text-mist">Inspected revision</dt><dd className="mt-1 break-all font-mono text-xs">{target.head}</dd></div>
       </dl>
       {status === "loading" && <p role="status">Checking your GitHub session…</p>}
-      {status === "unauthenticated" && <section className="rounded-lg border border-line p-6">
+      {(status === "unauthenticated" || reauthenticate) && <section className="rounded-lg border border-line p-6">
         <h2 className="text-lg font-semibold">Connect your GitHub account</h2>
         <p className="my-3 text-sm leading-6 text-mist">The link carries repository coordinates only. Source is read through your GitHub session; your local credentials and environment files are not uploaded by the CLI.</p>
         <button className={`${button} bg-primary text-ink`} onClick={() => void signIn("github", { callbackUrl: window.location.href })}>Sign in with GitHub</button>
       </section>}
       {busy && <p role="status" className="my-5 text-sm text-mist">{busy === "preview" ? "Inspecting the pinned branch…" : "Rechecking the branch and writing the repair…"}</p>}
-      {error && <div role="alert" className="my-5 rounded-md border border-accent/40 p-4 text-sm text-accent"><p>{error}</p>{!preview && <button className={`${button} mt-3`} disabled={!!busy} onClick={() => void inspect()}>Retry inspection</button>}</div>}
+      {error && <div role="alert" className="my-5 rounded-md border border-accent/40 p-4 text-sm text-accent"><p>{error}</p>{!preview && !reauthenticate && <button className={`${button} mt-3`} disabled={!!busy} onClick={() => void inspect()}>Retry inspection</button>}</div>}
       {applied ? <section role="status" className="rounded-lg border border-primary/40 bg-panel p-6">
         <h2 className="text-xl font-semibold">{applied.prUrl ? "Repair PR opened" : "Repair commit created"}</h2>
         <p className="my-3 text-sm leading-6 text-mist">{applied.message}</p>
