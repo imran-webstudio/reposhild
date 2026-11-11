@@ -101,6 +101,22 @@ class GateTests(unittest.TestCase):
         self.assertIn('locally verified repair',r.stdout)
         self.assertEqual(self.git('rev-parse','HEAD',cwd=clone).stdout.strip(),clean)
         self.assertEqual((clone/'init').read_text(),'init();\n')
+    def test_legacy_dashboard_cleanup_verified_without_receipt(self):
+        for extra in ('', '\n', '\r\n'):
+            with self.subTest(extra=extra):
+                clone=self.setup_remote() if extra == '' else self.base/('clone'+str(len(extra)))
+                if extra:self.git('clone','-b','main',str(self.base/'remote.git'),str(clone))
+                self.write('init',self.payload());self.commit('bad')
+                (self.repo/'init').write_bytes(b'init();\n'+extra.encode())
+                clean=self.commit('legacy dashboard cleanup');self.git('push','origin','main')
+                r=self.cli('pull','origin','main',cwd=clone)
+                self.assertEqual(r.returncode,0,r.stderr)
+                self.assertEqual(self.git('rev-parse','HEAD',cwd=clone).stdout.strip(),clean)
+    def test_legacy_cleanup_with_unrelated_change_blocked(self):
+        clone=self.setup_remote();self.write('init',self.payload());self.commit('bad')
+        self.write('init','init();\n');self.write('README.md','unrelated change\n')
+        self.commit('legacy cleanup');self.git('push','origin','main')
+        r=self.cli('pull','origin','main',cwd=clone);self.assertNotEqual(r.returncode,0)
     def test_infected_current_head_advances_only_to_verified_repair(self):
         clone=self.setup_remote();self.write('init',self.payload());self.commit('bad');self.git('push','origin','main')
         self.git('pull','--ff-only','origin','main',cwd=clone)
@@ -147,12 +163,12 @@ class GateTests(unittest.TestCase):
         r=self.git('push','origin','new-branch',check=False)
         self.assertNotEqual(r.returncode,0)
         self.assertEqual(self.git('ls-remote','origin','refs/heads/new-branch').stdout,'')
-    def web_cleanup_fixture(self, extra_remote_change=False):
+    def web_cleanup_fixture(self, extra_remote_change=False, legacy=False):
         self.write('init',self.payload());bad=self.commit('published infection')
         web=self.setup_remote()
-        (web/'init').write_text('init();\n')
+        (web/'init').write_text('init();\n\n' if legacy else 'init();\n')
         self.git('add','.',cwd=web)
-        self.git('commit','-m','web repair\n\nRepoShield-Repair: padding-tail-v1',cwd=web)
+        self.git('commit','-m','legacy cleanup' if legacy else 'web repair\n\nRepoShield-Repair: padding-tail-v1',cwd=web)
         repair=self.git('rev-parse','HEAD',cwd=web).stdout.strip()
         if extra_remote_change:
             (web/'remote-feature.txt').write_text('must not overwrite')
@@ -176,6 +192,14 @@ class GateTests(unittest.TestCase):
         self.assertIn(old,self.git('for-each-ref','--format=%(objectname)','refs/reposhield/recovery/').stdout)
         self.assertEqual(self.git('log','-2','--format=%s').stdout,'local refinement\nlocal feature\n')
         self.assertEqual(self.git('ls-remote','origin','refs/heads/main').stdout.split()[0],new)
+    def test_legacy_web_cleanup_sync_preserves_local_deletion(self):
+        web,bad,repair=self.web_cleanup_fixture(legacy=True)
+        self.git('rm','init');old=self.commit('remove unused init')
+        self.enable_repair();r=self.cli('git-proxy','push','origin','main')
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertFalse((self.repo/'init').exists())
+        self.assertEqual(self.git('merge-base','--is-ancestor',repair,'HEAD',check=False).returncode,0)
+        self.assertIn(old,self.git('for-each-ref','--format=%(objectname)','refs/reposhield/recovery/').stdout)
     def test_sync_web_cleanup_fast_forwards_when_no_local_commits(self):
         web,bad,repair=self.web_cleanup_fixture();self.enable_repair()
         r=self.cli('git-proxy','push','origin','main')

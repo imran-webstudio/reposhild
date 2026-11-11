@@ -409,17 +409,32 @@ def repair_tree(commit):
         tree = git('write-tree', extra_env=env).stdout.decode().strip()
     return tree, [p for p, _, _ in edits]
 
-def verified_repair(commit):
-    """Never trust a commit message/receipt alone: recompute its complete repaired tree."""
+def verified_repair(commit, require_marker=True):
+    """Recompute every changed byte; legacy receipts are optional for pull only."""
     raw = git('cat-file', 'commit', commit).stdout
     header, _, message = raw.partition(b'\n\n')
     parents = [line[7:].decode() for line in header.splitlines() if line.startswith(b'parent ')]
-    if REPAIR_MARKER not in message.splitlines() or len(parents) != 1:return None
+    if len(parents) != 1 or (require_marker and REPAIR_MARKER not in message.splitlines()):return None
     parent = parents[0]
     try:tree, paths = repair_tree(parent)
     except Blocked:return None
-    if not paths or tree != git('rev-parse', commit + '^{tree}').stdout.decode().strip():return None
+    if not paths:return None
     entries = tree_entries(parent)
+    if tree != git('rev-parse', commit + '^{tree}').stdout.decode().strip():
+        if require_marker:return None
+        # Older dashboard cleanups appended a blank line. Permit only that
+        # byte-level difference, with every other file and mode unchanged.
+        after = tree_entries(commit)
+        if entries.keys() != after.keys():return None
+        for path, entry in entries.items():
+            current = after[path]
+            if path not in paths:
+                if entry != current:return None
+                continue
+            if entry[:2] != current[:2]:return None
+            expected = repair_blob(path, git('cat-file', 'blob', entry[2]).stdout)
+            actual = git('cat-file', 'blob', current[2]).stdout
+            if actual not in (expected, expected + b'\n', expected + b'\r\n'):return None
     return parent, {(path, entries[path][2]) for path in paths}
 
 def approve_pull(old, new, commits):
@@ -430,7 +445,7 @@ def approve_pull(old, new, commits):
     if not findings:return
     verified = []
     for commit in commits:
-        repair = verified_repair(commit)
+        repair = verified_repair(commit, require_marker=False)
         if repair and git('merge-base', '--is-ancestor', commit, new, check=False).returncode == 0:
             verified.append(repair)
     remaining = []
@@ -472,7 +487,7 @@ def verified_cleanup_fork(head, remote_head):
         raise Blocked('Remote history is outside the verified cleanup sync limit. Pull and review it before pushing.')
     previous = common
     for commit in commits:
-        repair = verified_repair(commit)
+        repair = verified_repair(commit, require_marker=False)
         if not repair or repair[0] != previous:
             raise Blocked('The remote contains changes beyond an exact supported web cleanup. Review and integrate those changes before pushing; nothing was rewritten.')
         previous = commit
@@ -625,7 +640,7 @@ def install(runtime):
 
 
 # Global protection is scoped to the current OS account, like npm -g with a user prefix.
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 HOOK_NAMES = ['applypatch-msg','pre-applypatch','post-applypatch','pre-commit','pre-merge-commit',
     'prepare-commit-msg','commit-msg','post-commit','pre-rebase','post-checkout','post-merge',
     'pre-push','pre-auto-gc','post-rewrite','sendemail-validate','reference-transaction',

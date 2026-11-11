@@ -1,6 +1,6 @@
 {
   "name": "@imran-webstudio/reposhield-cli",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "RepoShield global Git pull/push protection for macOS and Linux",
   "license": "UNLICENSED",
