@@ -255,7 +255,7 @@ def safe_checkout(repo, old):
     if current_attrs.returncode == 0 and inspect('.gitattributes', current_attrs.stdout):
         raise Blocked('Current checkout requests custom attribute drivers; review before pull.')
 
-def guarded_pull(remote, branch, include_tags=False):
+def guarded_pull(remote, branch, include_tags=False, expected_new=None):
     repo = root()
     # Limit the command to explicit named remotes and full branch names, not arbitrary refspecs/options.
     remotes = git('remote').stdout.decode().splitlines()
@@ -279,6 +279,8 @@ def guarded_pull(remote, branch, include_tags=False):
         git('fetch', '--no-tags', '--no-recurse-submodules', '--no-write-fetch-head', '--refmap=',
             remote, *refspecs)
         new = revision(private_ref)
+        if expected_new and new != expected_new:
+            raise Blocked('The remote changed during cleanup synchronization. Retry the push to inspect the new revision.')
         commits = [old] + commit_range(old, new)
         tags = []
         tag_commits = []
@@ -459,6 +461,26 @@ def pull_handoff(remote, branch, head):
             try:subprocess.run([opener, link], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
             except (OSError, subprocess.TimeoutExpired):pass
 
+def verified_cleanup_fork(head, remote_head):
+    """Allow synchronization only when every remote-only commit is an exact repair."""
+    bases = git('merge-base', '--all', head, remote_head, check=False).stdout.decode().splitlines()
+    if len(bases) != 1:
+        raise Blocked('Branches do not have one unambiguous common base. Review the divergence manually; nothing changed.')
+    common = bases[0]
+    commits = git('rev-list', '--reverse', '--topo-order', '--max-count=21', common + '..' + remote_head, '--').stdout.decode().splitlines()
+    if not commits or len(commits) > 20:
+        raise Blocked('Remote history is outside the verified cleanup sync limit. Pull and review it before pushing.')
+    previous = common
+    for commit in commits:
+        repair = verified_repair(commit)
+        if not repair or repair[0] != previous:
+            raise Blocked('The remote contains changes beyond an exact supported web cleanup. Review and integrate those changes before pushing; nothing was rewritten.')
+        previous = commit
+    if previous != remote_head:
+        raise Blocked('The remote cleanup history is not linear. Review it manually before pushing.')
+    approve([remote_head])
+    return common
+
 def auto_repair_push(arguments):
     # Native pre-push remains authoritative for complex/multiple refspecs.
     positional = [a for a in arguments if a not in ('-u', '--set-upstream', '--progress', '--porcelain', '--verbose', '-v', '--quiet', '-q')]
@@ -495,15 +517,23 @@ def auto_repair_push(arguments):
             'refs/heads/*:' + namespace + '/heads/*', 'refs/tags/*:' + namespace + '/tags/*')
         base_result = git('rev-parse', '--verify', namespace + '/heads/' + destination, check=False)
         base = base_result.stdout.decode().strip() if base_result.returncode == 0 else None
+        local_base = base
+        sync_cleanup = False
         if base and git('merge-base', '--is-ancestor', base, head, check=False).returncode:
-            raise Blocked('Push is not a fast-forward. Automatic repair never force-pushes; resolve branch divergence first.')
-        outgoing = commit_range(base, head)
+            local_base = verified_cleanup_fork(head, base)
+            if local_base == head:
+                guarded_pull(remote, destination, expected_new=base)
+                print('RepoShield: synchronized the verified web cleanup into your local checkout. Continuing the push.', file=sys.stderr)
+                return
+            sync_cleanup = True
+        outgoing = commit_range(local_base, head)
         findings = scan_commits(outgoing)
-        if not findings:return
+        if not findings and not sync_cleanup:return
+        if sync_cleanup:print('RepoShield: synchronizing an exact web cleanup with private local commits.', file=sys.stderr)
         print('RepoShield: checking findings for supported private-history repair:', file=sys.stderr)
         for item in findings[:100]:print(json.dumps(item, ensure_ascii=True), file=sys.stderr)
         if base:approve([base])
-        commits = git('rev-list', '--reverse', '--topo-order', (base + '..' if base else '') + head, '--').stdout.decode().splitlines()
+        commits = git('rev-list', '--reverse', '--topo-order', (local_base + '..' if local_base else '') + head, '--').stdout.decode().splitlines()
         affected = set(commits)  # Every rewritten parent/descendant must be unshared, even when blob findings were deduplicated.
         for bad in affected:
             other_refs = git('for-each-ref', '--format=%(refname)', '--contains=' + bad, 'refs/heads/', 'refs/tags/').stdout.decode().splitlines()
@@ -516,7 +546,8 @@ def auto_repair_push(arguments):
                 commit = git('rev-parse', '--verify', tip + '^{commit}', check=False)
                 if commit.returncode == 0 and git('merge-base', '--is-ancestor', bad, commit.stdout.decode().strip(), check=False).returncode == 0:
                     raise Blocked('An affected commit is already published on the remote. Automatic repair will not rewrite shared history. Repair that branch in the web app or review a history rewrite.')
-        rewritten = {};changes = []
+        rewritten = {local_base: base} if sync_cleanup else {}
+        changes = []
         for commit in commits:
             raw = git('cat-file', 'commit', commit).stdout
             header, separator, message = raw.partition(b'\n\n')
@@ -545,7 +576,10 @@ def auto_repair_push(arguments):
         except Blocked:
             git('read-tree', '-m', '-u', repaired, head, check=False)
             raise
-        print('RepoShield: recognized payloads removed; outgoing commits passed targeted checks.', file=sys.stderr)
+        if sync_cleanup:
+            print('RepoShield: verified web cleanup synchronized; preserved ' + str(len(commits)) + ' private local commit(s). Outgoing commits passed targeted checks.', file=sys.stderr)
+        else:
+            print('RepoShield: recognized payloads removed; outgoing commits passed targeted checks.', file=sys.stderr)
         for commit, path in changes:print('  ' + json.dumps(path) + ' (previous commit ' + commit[:12] + ')', file=sys.stderr)
         print('Recovery reference: ' + backup + '. Continuing the original push; its hooks will scan the actual outgoing refs again.', file=sys.stderr)
     finally:
@@ -591,7 +625,7 @@ def install(runtime):
 
 
 # Global protection is scoped to the current OS account, like npm -g with a user prefix.
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 HOOK_NAMES = ['applypatch-msg','pre-applypatch','post-applypatch','pre-commit','pre-merge-commit',
     'prepare-commit-msg','commit-msg','post-commit','pre-rebase','post-checkout','post-merge',
     'pre-push','pre-auto-gc','post-rewrite','sendemail-validate','reference-transaction',

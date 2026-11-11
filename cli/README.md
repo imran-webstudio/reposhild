@@ -39,13 +39,13 @@ python3 scripts/build-guard-package.py
 
 ## Upgrading from v0.2.0
 
-Version 0.3.0 includes the fix for the global reference-transaction hook blocking git init, and removes a legacy command launcher that could shadow npm upgrades. After installing v0.3.0, activate the freshly installed package explicitly once:
+Version 0.3.1 includes the fix for the global reference-transaction hook blocking git init, and removes a legacy command launcher that could shadow npm upgrades. After installing v0.3.1, activate the freshly installed package explicitly once:
 
 ```sh
 node "$(npm root --global)/@imran-webstudio/reposhield-cli/bin/reposhield.mjs" enable
 ```
 
-Open a new terminal/reload the editor, then check `reposhield --version` reports 0.3.0. Ordinary `reposhield enable` works for subsequent use.
+Open a new terminal/reload the editor, then check `reposhield --version` reports 0.3.1. Ordinary `reposhield enable` works for subsequent use.
 
 Version 0.2.2 supports `git pull --tags origin main`. Incoming tags are staged privately and scanned before publication; conflicting tags and unsupported non-commit tags block with an explanation. Pulls remain fast-forward only. Error output distinguishes suspicious-code findings from operation/configuration failures; an operation error is not a malware verdict.
 
@@ -71,3 +71,15 @@ The web app uses its existing GitHub session, fetches immutable source from GitH
 The web app's `/guard/pull` feature must be deployed before enabling browser handoff. Global means the current OS account; configure every GUI client to use the managed Git wrapper.
 
 For a new branch or merge referencing previously published history, the pre-push gate can fetch the same destination into private refs and distinguish already-remote commits from newly uploaded snapshots. It always scans the final tip and every novel commit; a clean tip cannot hide a new infected intermediate commit. Unknown/mismatched destinations and missing coverage remain blocked.
+
+## Sync after a web cleanup (v0.3.1)
+
+With `reposhield repair on`, a normal current-branch push now handles the case where the web app has committed its fix but the local checkout still has the old payload:
+
+```sh
+git push origin main
+```
+
+If the remote is ahead only by exact, independently verified `padding-tail-v1` repair commits, the guard advances a behind-only checkout to the repair. If you also have private linear local development commits, it removes supported payloads from those snapshots and rebuilds them on top of the verified remote repair. Legitimate local edits and commit metadata are retained, the original tip is retained under a printed recovery ref, and every outgoing snapshot is rescanned before the original push continues. No force push is used.
+
+This is limited to a clean checkout and unshared, unsigned, non-merge local history. Ordinary remote development changes, ambiguous/missing repair receipts, shared local history, unknown payloads or concurrent changes remain blocked for review. An old scan/cleanup in the web app does not edit uncommitted files on a computer. Commit or safely stash unrelated local work before invoking automatic synchronization.
