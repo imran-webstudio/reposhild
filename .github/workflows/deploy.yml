@@ -139,7 +139,10 @@ jobs:
             done
             echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
             export REPOSHILD_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/reposhild:${{ github.sha }}
-            docker compose pull app
+            # Refresh PostgreSQL for the VPS platform rather than reusing a stale local tag.
+            docker image inspect --format "Cached PostgreSQL architecture: {{.Architecture}}/{{.Os}}" postgres:16-alpine || true
+            docker compose pull postgres app
+            docker image inspect --format "Pulled PostgreSQL architecture: {{.Architecture}}/{{.Os}}" postgres:16-alpine
             docker compose up -d --wait --wait-timeout 180
             docker logout
             docker image prune -f
