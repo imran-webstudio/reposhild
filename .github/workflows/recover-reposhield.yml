@@ -1,0 +1,43 @@
+name: Recover existing RepoShield containers
+on:
+  push:
+    branches: [fix/diagnose-reposhield-postgres]
+    paths: [.github/workflows/recover-reposhield.yml]
+  workflow_dispatch:
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect and recreate only the failing database container
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          password: ${{ secrets.VPS_PASSWORD }}
+          command_timeout: 5m
+          script: |
+            set -eu
+            docker inspect --format 'State={{.State.Status}} Error={{.State.Error}} Entrypoint={{json .Config.Entrypoint}} Cmd={{json .Config.Cmd}}' reposhild-postgres-1
+            docker run --rm --entrypoint /bin/sh postgres:16-alpine -c 'head -c 80 /usr/local/bin/docker-entrypoint.sh | od -An -tx1; ls -l /usr/bin/env /bin/bash'
+            cd /root/reposhild
+            docker compose up -d --no-deps --force-recreate postgres
+            for attempt in $(seq 1 20); do
+              health=$(docker inspect --format '{{.State.Health.Status}}' reposhild-postgres-1)
+              echo "PostgreSQL health: $health"
+              if [ "$health" = healthy ]; then break; fi
+              sleep 3
+            done
+            if [ "$health" != healthy ]; then
+              docker logs --tail 30 reposhild-postgres-1
+              exit 1
+            fi
+            docker start reposhild-app-1
+            for attempt in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:3210/api/setup; then
+                echo "RepoShield is responding."
+                exit 0
+              fi
+              sleep 3
+            done
+            docker logs --tail 40 reposhild-app-1
+            exit 1
