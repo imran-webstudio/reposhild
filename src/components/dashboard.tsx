@@ -20,6 +20,7 @@ interface Progress {
 
 export function Dashboard() {
   const { data: session, status } = useSession();
+  const [githubAccessUrl, setGithubAccessUrl] = useState("https://github.com/settings/applications");
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [databaseConfigured, setDatabaseConfigured] = useState<boolean | null>(null);
   const [scanId, setScanId] = useState<string | null>(null);
@@ -50,10 +51,24 @@ export function Dashboard() {
   const login = session?.user?.login || session?.user?.name || "";
 
   useEffect(() => {
+    if (status !== "authenticated") return;
+    const revealAccess = () => {
+      if (window.location.hash === "#organization-access") {
+        const panel = document.getElementById("organization-access");
+        if (panel instanceof HTMLDetailsElement) panel.open = true;
+      }
+    };
+    revealAccess();
+    window.addEventListener("hashchange", revealAccess);
+    return () => window.removeEventListener("hashchange", revealAccess);
+  }, [status]);
+
+  useEffect(() => {
     fetch("/api/setup")
       .then((response) => response.json())
-      .then((body: { githubConfigured?: boolean; databaseConfigured?: boolean }) => {
+      .then((body: { githubConfigured?: boolean; databaseConfigured?: boolean; githubAccessUrl?: string }) => {
         setConfigured(Boolean(body.githubConfigured));
+        if (body.githubAccessUrl && /^https:\/\/github\.com\/settings\/(?:applications|connections\/applications\/[A-Za-z0-9_]+)$/.test(body.githubAccessUrl)) setGithubAccessUrl(body.githubAccessUrl);
         setDatabaseConfigured(Boolean(body.databaseConfigured));
       })
       .catch(() => setConfigured(false));
@@ -348,7 +363,7 @@ export function Dashboard() {
               <p className="truncate text-xs text-mist">Supply-chain scan, no clone</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
             <button
               type="button"
               onClick={() => {
@@ -364,6 +379,10 @@ export function Dashboard() {
               {lightTheme ? "Dark" : "Light"}
             </button>
             {session?.user?.isAdmin && <a href="/admin" className="btn-ghost">Admin</a>}
+            {status === "authenticated" && <a href="#organization-access" className="btn-ghost" onClick={() => {
+              const panel = document.getElementById("organization-access");
+              if (panel instanceof HTMLDetailsElement) panel.open = true;
+            }}>Organization access</a>}
             <Account login={login} status={status} />
             <button
               type="button"
@@ -380,6 +399,26 @@ export function Dashboard() {
       {lockdown && <LockdownBanner signal={lockdown} />}
 
       <main className="mx-auto flex max-w-[1200px] flex-col gap-4 px-4 py-4 sm:px-6">
+        {status === "authenticated" && (
+          <details id="organization-access" className="pane rounded-2xl px-5 py-4 scroll-mt-24">
+            <summary className="cursor-pointer text-sm font-medium text-bone focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Missing an organization’s repositories?</summary>
+            <div className="mt-4 space-y-3 text-sm leading-6 text-mist">
+              <p>Scans include repositories visible to your current GitHub authorization. Joining an organization does not make GitHub ask for RepoShield access again.</p>
+              <ol className="list-decimal space-y-2 pl-5">
+                <li>Open RepoShield’s GitHub permissions below. Under Organization access, choose <strong className="text-bone">Grant</strong> or <strong className="text-bone">Request access</strong> next to the organization.</li>
+                <li>If approval is required, an organization owner must approve RepoShield. For organizations using SAML SSO, sign in through the organization first.</li>
+                <li>Return here, refresh your GitHub connection, then run <strong className="text-bone">Scan all repos</strong> again. Repositories you cannot access will remain unavailable.</li>
+              </ol>
+              <div className="flex flex-wrap gap-3 pt-1">
+                <a href={githubAccessUrl} target="_blank" rel="noreferrer" className="btn-primary">Manage organization access ↗</a>
+                <button type="button" className="btn-ghost" disabled={scanning} onClick={() => void signIn("github", { callbackUrl: window.location.origin + "/#organization-access" })}>Refresh GitHub connection</button>
+                <a href="https://docs.github.com/en/account-and-profile/how-tos/organization-membership/requesting-organization-approval-for-oauth-apps" target="_blank" rel="noreferrer" className="btn-quiet">GitHub approval instructions ↗</a>
+              </div>
+              <p className="text-xs text-faint">Refreshing sign-in cannot override an organization’s restrictions or force GitHub to show its consent screen. You do not need to revoke the app to use these controls.</p>
+            </div>
+          </details>
+        )}
+
         <section aria-label="Scan metrics" className="pane grid grid-cols-2 overflow-hidden rounded-2xl sm:grid-cols-4 sm:divide-x sm:divide-white/10">
           <Metric label="Repositories" value={String(repos.length)} hint={scanning ? "In progress" : progress ? "Latest view" : "No scan yet"} />
           <Metric
