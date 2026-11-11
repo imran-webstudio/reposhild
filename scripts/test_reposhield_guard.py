@@ -101,6 +101,16 @@ class GateTests(unittest.TestCase):
         self.assertIn('locally verified repair',r.stdout)
         self.assertEqual(self.git('rev-parse','HEAD',cwd=clone).stdout.strip(),clean)
         self.assertEqual((clone/'init').read_text(),'init();\n')
+    def test_ahead_only_pull_keeps_local_commits(self):
+        self.setup_remote();self.write('feature.txt','keep me');head=self.commit('private feature')
+        r=self.cli('git-proxy','pull','--tags','origin','main')
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),head)
+        self.assertIn('already up to date',r.stdout)
+    def test_ahead_only_pull_still_blocks_infected_local_tip(self):
+        self.setup_remote();self.write('init',self.payload());head=self.commit('private infection')
+        r=self.cli('pull','origin','main');self.assertNotEqual(r.returncode,0)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),head)
     def test_legacy_dashboard_cleanup_verified_without_receipt(self):
         for extra in ('', '\n', '\r\n'):
             with self.subTest(extra=extra):
