@@ -87,3 +87,9 @@ This is limited to a clean checkout and unshared, unsigned, non-merge local hist
 ## Existing dashboard cleanups (v0.3.2)
 
 If the web page shows zero supported repairs while the CLI reports an older infected commit, update the CLI and retry the pull. The pull gate now independently verifies older dashboard cleanups that lack a receipt. Every unchanged file and mode must match, and every changed file must equal the recognized payload removal (allowing one trailing blank line used by the older cleaner). Unrelated edits, unknown payloads and infected tags remain blocked. The same independent verification supports synchronization of private local commits on top of these older cleanups.
+
+## Commit protection and Husky recovery (v0.3.3)
+
+After updating and enabling RepoShield, normal commits through its managed Git path scan the complete staged snapshot before creating a commit. Recognized payloads block with file, line, rule and cleanup instructions. Unstaged changes are not scanned into the commit; partial commits use Git's temporary index. Existing pre-commit hooks remain chained, followed by another scan to catch index changes made by those hooks. The guard never automatically edits the index.
+
+If Husky resets `core.hooksPath` to the previously recorded path, the managed Git wrapper reinstalls its guard and preserves the Husky chain before committing or pushing. Unknown hook-path changes remain blocked for inspection. Explicit commit `--no-verify`/`-n` is refused by the wrapper. Native Git binaries, external clients, hook overrides and low-level commit creation can bypass client-side hooks; this is targeted detection, not a guarantee that all obfuscated code is malicious or detectable.

@@ -28,8 +28,62 @@ class GateTests(unittest.TestCase):
     def write(self,path,text):
         p=self.repo/path;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(text)
     def commit(self,msg):
-        self.git('add','.');self.git('commit','-m',msg);return self.git('rev-parse','HEAD').stdout.strip()
+        self.git('add','.');self.git('-c','core.hooksPath=/dev/null','commit','-m',msg);return self.git('rev-parse','HEAD').stdout.strip()
     def payload(self):return 'init();'+'\t'*180+"var z='-1000';var NX,SX,spin,splitLane,peel;(function(){var a=['c^mejb^tro'];"+'x'*300+'})(global,require);\n'
+    def test_commit_blocks_staged_payload_even_with_clean_worktree_file(self):
+        self.assertEqual(self.cli('enable').returncode,0)
+        self.write('evil.ts',self.payload());self.git('add','evil.ts');self.write('evil.ts','safe\n')
+        head=self.git('rev-parse','HEAD').stdout
+        r=self.git('commit','-m','blocked',check=False)
+        self.assertNotEqual(r.returncode,0);self.assertIn('Staged snapshot blocked',r.stderr)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout,head)
+    def test_commit_ignores_unstaged_payload(self):
+        self.assertEqual(self.cli('enable').returncode,0)
+        self.write('feature.txt','safe\n');self.git('add','feature.txt')
+        self.write('evil.ts',self.payload())
+        self.assertEqual(self.git('commit','-m','safe',check=False).returncode,0)
+    def test_local_commit_guard_rescans_after_previous_hook(self):
+        hook=self.repo/'.git/hooks/pre-commit'
+        source=self.base/'inert-payload';source.write_text(self.payload())
+        hook.write_text('#!/bin/sh\ncp '+str(source)+' evil.ts\n/usr/bin/git add evil.ts\n');hook.chmod(0o700)
+        self.assertEqual(self.cli('install','--runtime',str(self.base/'runtime')).returncode,0)
+        self.write('safe','safe');self.git('add','safe');head=self.git('rev-parse','HEAD').stdout
+        r=self.git('commit','-m','blocked after hook',check=False)
+        self.assertNotEqual(r.returncode,0);self.assertIn('Staged snapshot blocked',r.stderr)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout,head)
+    def test_known_previous_hook_reset_is_repaired_but_unknown_is_blocked(self):
+        custom=self.repo/'.husky/_';custom.mkdir(parents=True)
+        self.git('config','core.hooksPath','.husky/_')
+        runtime=str(self.base/'runtime')
+        self.assertEqual(self.cli('install','--runtime',runtime).returncode,0)
+        self.git('config','core.hooksPath','.husky/_')
+        self.assertEqual(self.cli('install','--runtime',runtime).returncode,0)
+        self.git('config','core.hooksPath','.unknown')
+        self.assertNotEqual(self.cli('install','--runtime',runtime).returncode,0)
+    def test_commit_shim_restores_husky_reset_and_blocks_bypass(self):
+        custom=self.repo/'.husky/_';custom.mkdir(parents=True)
+        self.git('config','core.hooksPath','.husky/_');self.assertEqual(self.cli('enable').returncode,0)
+        self.assertEqual(self.cli('install','--runtime',str(self.global_runtime())).returncode,0)
+        self.git('config','core.hooksPath','.husky/_')
+        self.write('evil.ts',self.payload());self.git('add','evil.ts')
+        r=self.cli('git-proxy','commit','-m','blocked');self.assertNotEqual(r.returncode,0)
+        self.assertIn('Staged snapshot blocked',r.stderr)
+        self.assertNotEqual(self.cli('git-proxy','commit','--no-verify','-m','bypass').returncode,0)
+    def test_partial_commit_scans_git_temporary_index(self):
+        self.write('feature.txt','old');self.commit('base file')
+        self.assertEqual(self.cli('enable').returncode,0)
+        self.write('evil.ts',self.payload());self.git('add','evil.ts')
+        self.write('feature.txt','safe change')
+        r=self.git('commit','--only','feature.txt','-m','partial',check=False)
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertNotEqual(self.git('cat-file','-e','HEAD:evil.ts',check=False).returncode,0)
+    def test_global_commit_guard_rescans_previous_hook_mutation(self):
+        hook=self.repo/'.git/hooks/pre-commit';source=self.base/'payload';source.write_text(self.payload())
+        hook.write_text('#!/bin/sh\ncp '+str(source)+' evil.ts\n/usr/bin/git add evil.ts\n');hook.chmod(0o700)
+        self.assertEqual(self.cli('enable').returncode,0)
+        self.write('safe','safe');self.git('add','safe')
+        r=self.git('commit','-m','blocked',check=False)
+        self.assertNotEqual(r.returncode,0);self.assertIn('Staged snapshot blocked',r.stderr)
     def test_hidden_extensionless_payload(self):
         f=g.inspect('init',self.payload().encode());self.assertEqual(f[0]['line'],1);self.assertIn('instruction',f[0])
         self.assertFalse(g.inspect('init',b'function init() {}\ninit();\n'))
@@ -419,7 +473,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(r.returncode,0,r.stderr)
         self.git('remote','add','origin',str(remote),cwd=fresh)
         (fresh/'init').write_text(self.payload())
-        self.git('add','init',cwd=fresh);self.git('commit','-m','synthetic',cwd=fresh)
+        self.git('add','init',cwd=fresh);self.git('-c','core.hooksPath=/dev/null','commit','-m','synthetic',cwd=fresh)
         r=self.git('push','origin','main',cwd=fresh,check=False)
         self.assertNotEqual(r.returncode,0);self.assertIn('RepoShield BLOCKED',r.stderr)
     def test_initialization_still_delegates_existing_template_hook(self):

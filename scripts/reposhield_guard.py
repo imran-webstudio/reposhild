@@ -166,6 +166,20 @@ def approve(commits):
             print(json.dumps(f, ensure_ascii=True), file=sys.stderr)
         raise ThreatDetected(str(len(findings)) + ' finding(s). No project code was run. Fix the listed files and rescan.')
 
+def approve_staged():
+    # write-tree honors Git's temporary index for partial commits and never
+    # reads unstaged file contents or runs clean/smudge filters.
+    tree = git('write-tree').stdout.decode().strip()
+    findings = scan_commits([tree])
+    if findings:
+        for item in findings[:100]:
+            item.pop('commit', None);item['snapshot'] = 'staged'
+            print(json.dumps(item, ensure_ascii=True), file=sys.stderr)
+        raise ThreatDetected('Staged snapshot blocked. Fix and stage the listed files, then retry the commit. Nothing was automatically edited.')
+    if git('write-tree').stdout.decode().strip() != tree:
+        raise Blocked('Staged files changed during inspection. Retry the commit.')
+    print('RepoShield: staged snapshot passed targeted checks.', file=sys.stderr)
+
 def commit_range(old, new):
     revision(new)
     if old and not ZERO.fullmatch(old):
@@ -614,7 +628,7 @@ def install(runtime):
     if config.exists():
         saved=json.loads(config.read_text())
         expected=saved.get('previous_local_hooks_path') or ''
-        if existing != str(hooks) and not (saved.get('disabled') and existing == expected):
+        if existing != str(hooks) and existing != expected:
             raise Blocked('Installation changed; inspect it before reinstalling.')
         previous=Path(saved['previous_hooks'])
         previous_setting=saved.get('previous_local_hooks_path')
@@ -630,6 +644,12 @@ def install(runtime):
             content+='umask 077\ntmp=$(/usr/bin/mktemp) || exit 1\ntrap \'/bin/rm -f "$tmp"\' EXIT HUP INT TERM\n/bin/cat > "$tmp" || exit 1\n'
             content+='/usr/bin/python3 -I -S -B '+shlex.quote(str(target))+' pre-push "$@" < "$tmp" || exit $?\n'
             if old.is_file() and os.access(old,os.X_OK):content+=shlex.quote(str(old))+' "$@" < "$tmp"\nexit $?\n'
+        elif name == 'pre-commit':
+            guard = '/usr/bin/python3 -I -S -B ' + shlex.quote(str(target)) + ' pre-commit'
+            content += guard + ' || exit $?\n'
+            if old.is_file() and os.access(old,os.X_OK):
+                content += shlex.quote(str(old)) + ' "$@" || exit $?\n'
+                content += guard + ' || exit $?\n'
         elif old.is_file() and os.access(old,os.X_OK):content+='exec '+shlex.quote(str(old))+' "$@"\n'
         file=hooks/name;file.write_text(content);file.chmod(0o700)
     config.write_text(json.dumps({'previous_local_hooks_path':previous_setting,'previous_hooks':str(previous),
@@ -641,7 +661,7 @@ def install(runtime):
 
 
 # Global protection is scoped to the current OS account, like npm -g with a user prefix.
-VERSION = '0.3.2'
+VERSION = '0.3.3'
 HOOK_NAMES = ['applypatch-msg','pre-applypatch','post-applypatch','pre-commit','pre-merge-commit',
     'prepare-commit-msg','commit-msg','post-commit','pre-rebase','post-checkout','post-merge',
     'pre-push','pre-auto-gc','post-rewrite','sendemail-validate','reference-transaction',
@@ -705,6 +725,7 @@ def global_hook(name, arguments):
             pre_push(arguments[0] if arguments else None, arguments[1] if len(arguments) > 1 else None)
     if not state:
         raise Blocked('Global installation metadata is missing.')
+    if name == 'pre-commit' and state.get('enabled'):approve_staged()
     previous = state.get('previous_global_hooks')
     if previous:
         old = Path(previous).expanduser()
@@ -733,6 +754,7 @@ def global_hook(name, arguments):
         raise Blocked('Recursive hook configuration.')
     if hook.is_file() and os.access(hook, os.X_OK):
         result = subprocess.run([str(hook)] + arguments, input=data)
+        if result.returncode == 0 and name == 'pre-commit' and state.get('enabled'):approve_staged()
         return result.returncode
     return 0
 
@@ -902,6 +924,11 @@ def git_proxy(arguments):
             raise Blocked('Use git pull REMOTE BRANCH (one branch, fast-forward only).')
         guarded_pull(*rest, include_tags=include_tags)
         return 0
+    if command == 'commit' and state and state.get('enabled'):
+        if '--no-verify' in rest or '-n' in rest:
+            raise Blocked('Commit bypass --no-verify/-n is disabled by the guarded shim.')
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):install(state['runtime'])
     if command == 'push':
         if '--no-verify' in rest:
             raise Blocked('Push bypass --no-verify is disabled by the guarded shim.')
@@ -945,6 +972,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     for name in ('enable','disable','status'):sub.add_parser(name)
+    sub.add_parser('pre-commit')
     scan = sub.add_parser('scan');scan.add_argument('ref', nargs='?', default='HEAD')
     pull = sub.add_parser('pull');pull.add_argument('remote');pull.add_argument('branch')
     push = sub.add_parser('pre-push');push.add_argument('remote', nargs='?');push.add_argument('url', nargs='?')
@@ -959,6 +987,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.action == 'scan':approve([revision(args.ref)]);print('RepoShield: revision passed targeted checks.')
+        elif args.action == 'pre-commit':approve_staged()
         elif args.action == 'pull':guarded_pull(args.remote, args.branch)
         elif args.action == 'pre-push':pre_push(args.remote, args.url)
         elif args.action == 'install':install(args.runtime)
