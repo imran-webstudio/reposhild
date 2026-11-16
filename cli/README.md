@@ -93,3 +93,7 @@ If the web page shows zero supported repairs while the CLI reports an older infe
 After updating and enabling RepoShield, normal commits through its managed Git path scan the complete staged snapshot before creating a commit. Recognized payloads block with file, line, rule and cleanup instructions. Unstaged changes are not scanned into the commit; partial commits use Git's temporary index. Existing pre-commit hooks remain chained, followed by another scan to catch index changes made by those hooks. The guard never automatically edits the index.
 
 If Husky resets `core.hooksPath` to the previously recorded path, the managed Git wrapper reinstalls its guard and preserves the Husky chain before committing or pushing. Unknown hook-path changes remain blocked for inspection. Explicit commit `--no-verify`/`-n` is refused by the wrapper. Native Git binaries, external clients, hook overrides and low-level commit creation can bypass client-side hooks; this is targeted detection, not a guarantee that all obfuscated code is malicious or detectable.
+
+## Repaired local tip ahead of an infected remote (v0.3.4)
+
+An already-up-to-date pull now scans the local snapshot it retains, rather than rejecting a remote ancestor that was repaired locally. Requested tags remain separately scanned. Two exact reviewed November 16 campaign tails are supported by both cleaners; unknown tails still require manual review.

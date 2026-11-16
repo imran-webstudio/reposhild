@@ -84,6 +84,20 @@ class GateTests(unittest.TestCase):
         self.write('safe','safe');self.git('add','safe')
         r=self.git('commit','-m','blocked',check=False)
         self.assertNotEqual(r.returncode,0);self.assertIn('Staged snapshot blocked',r.stderr)
+    def test_ahead_only_pull_keeps_clean_repair_of_infected_remote(self):
+        self.write('init',self.payload());self.commit('infected remote');self.setup_remote()
+        self.git('rm','init');clean=self.commit('delete local payload')
+        r=self.cli('git-proxy','pull','--tags','origin','main')
+        self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),clean)
+        self.assertFalse((self.repo/'init').exists())
+    def test_ahead_only_clean_repair_still_rejects_infected_tag(self):
+        self.write('init',self.payload());self.commit('infected remote');self.git('tag','infected');self.setup_remote()
+        self.git('push','origin','--tags');self.git('tag','-d','infected')
+        self.git('rm','init');clean=self.commit('delete local payload')
+        r=self.cli('git-proxy','pull','--tags','origin','main')
+        self.assertNotEqual(r.returncode,0)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),clean)
     def test_hidden_extensionless_payload(self):
         f=g.inspect('init',self.payload().encode());self.assertEqual(f[0]['line'],1);self.assertIn('instruction',f[0])
         self.assertFalse(g.inspect('init',b'function init() {}\ninit();\n'))

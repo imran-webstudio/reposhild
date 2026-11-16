@@ -319,13 +319,16 @@ def guarded_pull(remote, branch, include_tags=False, expected_new=None):
         commits = list(dict.fromkeys(commits))
         if len(commits) > MAX_COMMITS:
             raise Blocked('Combined branch/tag history exceeds the scan limit. Retry with --no-tags and review tag history separately.')
+        ahead_only = git('merge-base', '--is-ancestor', new, old, check=False).returncode == 0
         try:
-            approve_pull(old, new, commit_range(old, new))
+            # An ahead-only pull checks out nothing: approve the retained local
+            # snapshot, not an infected remote ancestor already repaired locally.
+            if ahead_only:approve([old])
+            else:approve_pull(old, new, commit_range(old, new))
             if tag_commits:approve(tag_commits)
         except ThreatDetected:
             if repair_enabled():pull_handoff(remote, branch, new)
             raise
-        ahead_only = git('merge-base', '--is-ancestor', new, old, check=False).returncode == 0
         if not ahead_only and git('merge-base', '--is-ancestor', old, new, check=False).returncode:
             raise Blocked('Your local and remote branches have diverged. RepoShield only applies fast-forward pulls. Review both branches before merging/rebasing.')
         if revision('HEAD') != old or git('status', '--porcelain', '--untracked-files=all').stdout:
@@ -349,7 +352,7 @@ def guarded_pull(remote, branch, include_tags=False, expected_new=None):
 
 REPAIR_MARKER = b'RepoShield-Repair: padding-tail-v1'
 # Byte hashes of the payload tails confirmed during this incident, not whole-file exemptions.
-KNOWN_TAIL_HASHES = ['0a54556284424834a5acf31d8a1e89f9a110962e4b9e1ca8d713b8bda096fdfe', '2ccc5171a550509f78202054cceec2bc866f58a74adf1c865434e78ef7481b34', '905721f48f5d13ced9e88a999b5c1d758f7ed3152acc1e04549b835dc79d7fea']
+KNOWN_TAIL_HASHES = ['0a54556284424834a5acf31d8a1e89f9a110962e4b9e1ca8d713b8bda096fdfe', '2ccc5171a550509f78202054cceec2bc866f58a74adf1c865434e78ef7481b34', '905721f48f5d13ced9e88a999b5c1d758f7ed3152acc1e04549b835dc79d7fea', '821696fa67a6d1b081ffade530420e42dcbc0470ecf0f7e876bbf1f6fd4eb50d', 'd1fcb49c82acaf598b10e5ed1e50c126e63799ccf65df4824d3686fe63cdb59f']
 
 def repair_enabled():
     state = global_state()
@@ -661,7 +664,7 @@ def install(runtime):
 
 
 # Global protection is scoped to the current OS account, like npm -g with a user prefix.
-VERSION = '0.3.3'
+VERSION = '0.3.4'
 HOOK_NAMES = ['applypatch-msg','pre-applypatch','post-applypatch','pre-commit','pre-merge-commit',
     'prepare-commit-msg','commit-msg','post-commit','pre-rebase','post-checkout','post-merge',
     'pre-push','pre-auto-gc','post-rewrite','sendemail-validate','reference-transaction',

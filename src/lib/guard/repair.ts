@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 /** Must produce the exact same bytes as padding-tail-v1 in the Python guard. */
 export const REPAIR_MARKER = "RepoShield-Repair: padding-tail-v1";
-const KNOWN_TAIL_HASHES = new Set(["0a54556284424834a5acf31d8a1e89f9a110962e4b9e1ca8d713b8bda096fdfe", "2ccc5171a550509f78202054cceec2bc866f58a74adf1c865434e78ef7481b34", "905721f48f5d13ced9e88a999b5c1d758f7ed3152acc1e04549b835dc79d7fea"]);
+const KNOWN_TAIL_HASHES = new Set(["0a54556284424834a5acf31d8a1e89f9a110962e4b9e1ca8d713b8bda096fdfe", "2ccc5171a550509f78202054cceec2bc866f58a74adf1c865434e78ef7481b34", "905721f48f5d13ced9e88a999b5c1d758f7ed3152acc1e04549b835dc79d7fea", "821696fa67a6d1b081ffade530420e42dcbc0470ecf0f7e876bbf1f6fd4eb50d", "d1fcb49c82acaf598b10e5ed1e50c126e63799ccf65df4824d3686fe63cdb59f"]);
 export function repairPaddingTail(source: string): string {
   const after = source.replace(/[ \t]{50,}([^\n]*)/g, (whole, tail: string, offset: number) => {
     const body = tail.replace(/\r+$/, "");
