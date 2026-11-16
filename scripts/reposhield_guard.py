@@ -330,7 +330,7 @@ def guarded_pull(remote, branch, include_tags=False, expected_new=None):
             if repair_enabled():pull_handoff(remote, branch, new)
             raise
         if not ahead_only and git('merge-base', '--is-ancestor', old, new, check=False).returncode:
-            raise Blocked('Your local and remote branches have diverged. RepoShield only applies fast-forward pulls. Review both branches before merging/rebasing.')
+            raise Blocked('Your local and remote branches have diverged. RepoShield only applies fast-forward pulls. Run reposhield sync ' + remote + ' ' + branch + ', then retry. Real conflicts remain blocked for review.')
         if revision('HEAD') != old or git('status', '--porcelain', '--untracked-files=all').stdout:
             raise Blocked('Repository changed during inspection; rerun the guarded pull.')
         if tags:
@@ -494,6 +494,164 @@ def pull_handoff(remote, branch, head):
             try:subprocess.run([opener, link], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
             except (OSError, subprocess.TimeoutExpired):pass
 
+def duplicate_remote_snapshot(head, incoming, common):
+    """Recognize a whole remote snapshot already present in local ancestry.
+
+    Only CRLF, the explicit init-removal policy and cleaned config trailing
+    whitespace are normalized. New remote development edits cannot be omitted.
+    """
+    candidates = git('rev-list', '--first-parent', '--max-count=51', common + '..' + head, '--').stdout.decode().splitlines()
+    if len(candidates) > 50:return False
+    cache = {};total = 0
+    def signature(commit):
+        nonlocal total
+        result = []
+        for path, (mode, kind, oid) in tree_entries(commit).items():
+            if path.rsplit('/', 1)[-1] == 'init':continue
+            if kind != b'blob':return None
+            key = (path, oid)
+            if key not in cache:
+                size = int(git('cat-file', '-s', oid).stdout);total += size
+                if size > MAX_BLOB or total > MAX_TOTAL * 3:
+                    raise Blocked('Duplicate-history verification exceeds its byte limit; review the divergence manually.')
+                raw = git('cat-file', 'blob', oid).stdout
+                if b'\0' not in raw[:4096]:raw = raw.replace(b'\r\n', b'\n')
+                name = path.rsplit('/', 1)[-1]
+                if name == 'package.json':
+                    try:
+                        manifest = json.loads(raw)
+                        for field, value in manifest.get('scripts', {}).items():
+                            if isinstance(value, str) and value.startswith('node init && '):manifest['scripts'][field] = value[len('node init && '):]
+                        raw = json.dumps(manifest, sort_keys=True, ensure_ascii=True, separators=(',', ':')).encode()
+                    except (ValueError, TypeError, AttributeError):return None
+                elif name == '.gitignore':raw = b'\n'.join(line for line in raw.splitlines() if line != b'.env')
+                elif name in ('postcss.config.mjs', 'eslint.config.mjs') and b'`' not in raw and raw.rstrip().endswith((b';', b'}')):
+                    raw = raw.rstrip(b' \t\r\n')
+                cache[key] = hashlib.sha256(raw).digest()
+            result.append((path, mode, cache[key]))
+        return result
+    incoming_signature = signature(incoming)
+    if incoming_signature is None:return False
+    return any(signature(candidate) == incoming_signature for candidate in candidates)
+
+def sync_repository(remote=None, branch=None):
+    """Explicit, scanned integration. No push, force update or history rewrite."""
+    repo = root()
+    branch_ref = git('symbolic-ref', '--quiet', 'HEAD', check=False).stdout.decode().strip()
+    if not branch_ref.startswith('refs/heads/'):
+        raise Blocked('Sync needs a checked-out local branch; detached HEAD was left untouched.')
+    current = branch_ref[len('refs/heads/'):]
+    if remote is None:
+        remote = git('config', '--get', 'branch.' + current + '.remote', check=False).stdout.decode().strip()
+        merge = git('config', '--get', 'branch.' + current + '.merge', check=False).stdout.decode().strip()
+        if not remote or not merge.startswith('refs/heads/'):
+            raise Blocked('Specify reposhield sync REMOTE BRANCH, for example: reposhield sync origin main')
+        branch = merge[len('refs/heads/'):]
+    if not branch or remote not in git('remote').stdout.decode().splitlines() or remote.startswith('-'):
+        raise Blocked('Specify a configured remote and one branch: reposhield sync origin main')
+    if git('check-ref-format', 'refs/heads/' + branch, check=False).returncode:
+        raise Blocked('Invalid sync branch.')
+    validate_transport(remote)
+    if git('remote', 'get-url', remote).stdout != git('remote', 'get-url', '--push', remote).stdout:
+        raise Blocked('Sync requires matching fetch/push destinations.')
+    head = revision('HEAD');safe_checkout(repo, head)
+    if git('status', '--porcelain', '--untracked-files=all').stdout:
+        raise Blocked('Sync needs a clean checkout. Commit your work or safely stash it, then rerun reposhield sync. Nothing was changed.')
+    for name in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply'):
+        path = Path(git('rev-parse', '--path-format=absolute', '--git-path', name).stdout.decode().strip())
+        if path.exists():raise Blocked('Finish or abort the existing Git operation before syncing: ' + name)
+    namespace = 'refs/reposhield/sync/' + uuid.uuid4().hex
+    ref = namespace + '/branch'
+    tracking = 'refs/remotes/' + remote + '/' + branch
+    previous_tracking = git('rev-parse', '--verify', tracking, check=False).stdout.decode().strip()
+    try:
+        git('fetch', '--no-tags', '--no-recurse-submodules', '--no-write-fetch-head', '--refmap=', remote, 'refs/heads/' + branch + ':' + ref)
+        incoming = revision(ref)
+        ahead_only = git('merge-base', '--is-ancestor', incoming, head, check=False).returncode == 0
+        try:approve([head] if ahead_only else [head, incoming])
+        except ThreatDetected:
+            if repair_enabled():pull_handoff(remote, branch, incoming)
+            raise
+        # Bound graph traversal, and check historical attributes before asking
+        # Git to merge; it must never invoke a custom driver from any side.
+        commit_range(head, incoming)
+        bases = git('merge-base', '--all', head, incoming, check=False).stdout.decode().splitlines()
+        if len(bases) != 1:raise Blocked('Sync requires one common ancestor. Unrelated/ambiguous histories need manual review; nothing changed.')
+        for path, (mode, kind, oid) in tree_entries(bases[0]).items():
+            if not ahead_only and path.rsplit('/', 1)[-1] == '.gitattributes':
+                if int(git('cat-file', '-s', oid).stdout) > MAX_BLOB or inspect(path, git('cat-file', 'blob', oid).stdout):
+                    raise Blocked('Historical Git attributes require review; no merge driver was run.')
+        if git('merge-base', '--is-ancestor', incoming, head, check=False).returncode == 0:
+            tree = git('rev-parse', head + '^{tree}').stdout.decode().strip();parents = [head]
+        elif git('merge-base', '--is-ancestor', head, incoming, check=False).returncode == 0:
+            tree = git('rev-parse', incoming + '^{tree}').stdout.decode().strip();parents = [incoming]
+        else:
+            result = git('-c', 'merge.default=text', '-c', 'core.autocrlf=true', 'merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', '-Xrenormalize', head, incoming, check=False)
+            parts = result.stdout.split(b'\0')
+            if result.returncode == 1 and duplicate_remote_snapshot(head, incoming, bases[0]):
+                print('RepoShield: the complete cleaned remote snapshot matches local ancestry; preserving later local edits and joining both histories.')
+                tree = git('rev-parse', head + '^{tree}').stdout.decode().strip();parents = [head, incoming]
+            elif result.returncode:
+                paths = [p.decode('utf8', 'surrogateescape') for p in parts[1:] if p]
+                for path in paths[:100]:print('Merge conflict: ' + json.dumps(path, ensure_ascii=True), file=sys.stderr)
+                raise Blocked('Sync found conflicting edits. Nothing was changed or committed. Run git merge --no-commit ' + incoming + ', resolve the listed files in your editor, then git add the resolutions and git commit (the commit guard rescans them). If Git did not produce paths, check git merge-tree support. ' + result.stderr.decode('utf8', 'replace')[:200])
+            else:tree = parts[0].decode();parents = [head, incoming]
+        entries = tree_entries(tree);removed = [p for p in entries if p.rsplit('/', 1)[-1] == 'init'];edits = {}
+        for path, (mode, kind, oid) in entries.items():
+            if path.rsplit('/', 1)[-1] != 'package.json':continue
+            raw = git('cat-file', 'blob', oid).stdout;manifest = json.loads(raw);changed = False
+            for key, value in manifest.get('scripts', {}).items():
+                if isinstance(value, str) and value.startswith('node init && '):
+                    manifest['scripts'][key] = value[len('node init && '):];changed = True
+            if changed:
+                newline = '\r\n' if b'\r\n' in raw else '\n'
+                edits[path] = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').replace('\n', newline).encode()
+        # Preserve the existing explicit .env exclusion while integrating other
+        # ignore-file edits, rather than reverting the entire incoming file.
+        local_ignore = git('show', head + ':.gitignore', check=False)
+        merged_ignore = git('show', tree + ':.gitignore', check=False)
+        if local_ignore.returncode == 0 and b'.env' in local_ignore.stdout.splitlines():
+            if merged_ignore.returncode == 0 and b'.env' not in merged_ignore.stdout.splitlines():
+                edits['.gitignore'] = merged_ignore.stdout.rstrip(b'\r\n') + b'\n.env\n'
+        if removed or edits:
+            with tempfile.TemporaryDirectory(prefix='reposhield-sync-index-') as directory:
+                env = {'GIT_INDEX_FILE': str(Path(directory) / 'index')}
+                git('read-tree', tree, extra_env=env)
+                for path in removed:git('update-index', '--force-remove', '--', path, extra_env=env)
+                for path, raw in edits.items():
+                    oid = git('hash-object', '-w', '--stdin', data=raw).stdout.decode().strip()
+                    git('update-index', '--add', '--cacheinfo', entries[path][0].decode() + ',' + oid + ',' + path, extra_env=env)
+                tree = git('write-tree', extra_env=env).stdout.decode().strip()
+        unchanged = len(parents) == 1 and tree == git('rev-parse', parents[0] + '^{tree}').stdout.decode().strip()
+        if unchanged:new = parents[0]
+        else:
+            args = ['commit-tree', tree]
+            for parent in parents:args += ['-p', parent]
+            new = git(*args, data=b'Merge and clean startup files through RepoShield sync\n').stdout.decode().strip()
+        approve([new])
+        # This verifies every newly uploaded snapshot. Historical payloads may
+        # only be excluded when a fresh fetch proves they already exist remotely.
+        approve_outgoing(remote, git('remote', 'get-url', remote).stdout.decode().strip(), incoming, new)
+        if revision('HEAD') != head or git('symbolic-ref', 'HEAD').stdout.decode().strip() != branch_ref or git('status', '--porcelain', '--untracked-files=all').stdout:
+            raise Blocked('Checkout changed during sync; retry when idle. No branch update was made.')
+        # Detect remote changes before applying; later races are also rejected by
+        # normal push, never solved with force push.
+        advertised = git('ls-remote', '--refs', remote, 'refs/heads/' + branch).stdout.decode().split()
+        if not advertised or advertised[0] != incoming:raise Blocked('Remote changed during sync; rerun reposhield sync. Nothing changed.')
+        if new != head:
+            backup = 'refs/reposhield/recovery/' + uuid.uuid4().hex;git('update-ref', backup, head)
+            git('read-tree', '-m', '-u', head, new)
+            try:git('update-ref', branch_ref, new, head)
+            except Blocked:
+                git('read-tree', '-m', '-u', new, head, check=False);raise
+            print('Recovery reference: ' + backup)
+        expected_tracking = previous_tracking or '0' * len(incoming)
+        git('update-ref', tracking, incoming, expected_tracking, check=False)
+        for path in removed:print('Removed extensionless init: ' + json.dumps(path))
+        print('RepoShield sync complete. Local and remote changes passed targeted checks. Nothing was pushed. Next: git push ' + shlex.quote(remote) + ' ' + shlex.quote(current + ':' + branch))
+    finally:
+        git('update-ref', '-d', ref, check=False)
+
 def verified_cleanup_fork(head, remote_head):
     """Allow synchronization only when every remote-only commit is an exact repair."""
     bases = git('merge-base', '--all', head, remote_head, check=False).stdout.decode().splitlines()
@@ -507,7 +665,7 @@ def verified_cleanup_fork(head, remote_head):
     for commit in commits:
         repair = verified_repair(commit, require_marker=False)
         if not repair or repair[0] != previous:
-            raise Blocked('The remote contains changes beyond an exact supported web cleanup. Review and integrate those changes before pushing; nothing was rewritten.')
+            raise Blocked('The remote contains changes beyond an exact supported web cleanup. Run reposhield sync REMOTE BRANCH (for example, reposhield sync origin main), then retry the push; nothing was rewritten.')
         previous = commit
     if previous != remote_head:
         raise Blocked('The remote cleanup history is not linear. Review it manually before pushing.')
@@ -664,7 +822,7 @@ def install(runtime):
 
 
 # Global protection is scoped to the current OS account, like npm -g with a user prefix.
-VERSION = '0.3.4'
+VERSION = '0.4.0'
 HOOK_NAMES = ['applypatch-msg','pre-applypatch','post-applypatch','pre-commit','pre-merge-commit',
     'prepare-commit-msg','commit-msg','post-commit','pre-rebase','post-checkout','post-merge',
     'pre-push','pre-auto-gc','post-rewrite','sendemail-validate','reference-transaction',
@@ -975,6 +1133,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     for name in ('enable','disable','status'):sub.add_parser(name)
+    sync = sub.add_parser('sync');sync.add_argument('remote', nargs='?');sync.add_argument('branch', nargs='?')
     sub.add_parser('pre-commit')
     scan = sub.add_parser('scan');scan.add_argument('ref', nargs='?', default='HEAD')
     pull = sub.add_parser('pull');pull.add_argument('remote');pull.add_argument('branch')
@@ -990,6 +1149,7 @@ def main():
     args = parser.parse_args()
     try:
         if args.action == 'scan':approve([revision(args.ref)]);print('RepoShield: revision passed targeted checks.')
+        elif args.action == 'sync':sync_repository(args.remote, args.branch)
         elif args.action == 'pre-commit':approve_staged()
         elif args.action == 'pull':guarded_pull(args.remote, args.branch)
         elif args.action == 'pre-push':pre_push(args.remote, args.url)

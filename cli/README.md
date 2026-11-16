@@ -97,3 +97,22 @@ If Husky resets `core.hooksPath` to the previously recorded path, the managed Gi
 ## Repaired local tip ahead of an infected remote (v0.3.4)
 
 An already-up-to-date pull now scans the local snapshot it retains, rather than rejecting a remote ancestor that was repaired locally. Requested tags remain separately scanned. Two exact reviewed November 16 campaign tails are supported by both cleaners; unknown tails still require manual review.
+
+## Resolve incoming/outgoing commits yourself (v0.4.0)
+
+Inside the affected repository, commit or safely stash unfinished edits, then run:
+
+```sh
+reposhield sync origin main
+git push origin main:main
+```
+
+`reposhield sync` without arguments uses the current branch's configured upstream. It fetches into private refs, scans the current snapshots, integrates compatible commits without rewriting history, scans every outgoing snapshot, checks the remote again, and keeps a recovery reference before updating the checkout. It never pushes or force-pushes. No dependencies, Git project hooks, or custom merge/filter drivers are run during sync.
+
+Line-ending normalization and a complete-snapshot comparison handle rewritten duplicate commits when the cleaned remote snapshot already exists in local ancestry. New remote development edits are preserved by normal merging. Genuine content conflicts stop without changing the checkout and print exact paths plus a standard Git merge-resolution command.
+
+Per this installation's cleanup policy, sync removes tracked files whose exact basename is `init`, preserves `init.ts` / `init.dart`, removes exact `node init && ` package-script prefixes, and retains an existing explicit `.env` ignore entry. The original tip is retained in the printed recovery ref.
+
+Dirty checkouts, active merge/rebase operations, missing/common-ancestor ambiguity, unsafe current snapshots, unknown payloads, custom attribute drivers and incomplete scans remain blocked. A clean local repair already ahead of the remote is retained. Sync does not import tags; infected tags remain independently blocked by `git pull --tags`. For a branch-only pull use `git pull --no-tags origin main` while reviewing tags separately.
+
+If the remote itself still contains a detected payload, finish its web repair first, then run sync again. This resolves integration blocks; it does not revoke credentials or remove malware from another machine or runner that can rewrite GitHub.

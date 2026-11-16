@@ -98,6 +98,75 @@ class GateTests(unittest.TestCase):
         r=self.cli('git-proxy','pull','--tags','origin','main')
         self.assertNotEqual(r.returncode,0)
         self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),clean)
+    def test_sync_merges_divergent_features_without_pushing(self):
+        web=self.setup_remote();self.write('local.txt','my work');old=self.commit('local')
+        (web/'remote.txt').write_text('other work');self.git('add','.',cwd=web);self.git('commit','-m','remote',cwd=web);self.git('push','origin','main',cwd=web)
+        remote=self.git('rev-parse','HEAD',cwd=web).stdout.strip()
+        r=self.cli('sync','origin','main');self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual((self.repo/'local.txt').read_text(),'my work');self.assertEqual((self.repo/'remote.txt').read_text(),'other work')
+        self.assertEqual(self.git('merge-base','--is-ancestor',remote,'HEAD',check=False).returncode,0)
+        self.assertIn(old,self.git('for-each-ref','--format=%(objectname)','refs/reposhield/recovery/').stdout)
+        self.assertEqual(self.git('ls-remote','origin','main').stdout.split()[0],remote)
+        self.assertEqual(self.git('status','--porcelain').stdout,'')
+    def test_sync_real_conflict_leaves_checkout_unchanged(self):
+        web=self.setup_remote();self.write('README.md','local edit\n');old=self.commit('local')
+        (web/'README.md').write_text('remote edit\n');self.git('add','.',cwd=web);self.git('commit','-m','remote',cwd=web);self.git('push','origin','main',cwd=web)
+        r=self.cli('sync','origin','main');self.assertNotEqual(r.returncode,0);self.assertIn('README.md',r.stderr)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),old);self.assertEqual((self.repo/'README.md').read_text(),'local edit\n')
+        self.assertEqual(self.git('status','--porcelain').stdout,'');self.assertEqual(self.git('for-each-ref','refs/reposhield/sync/').stdout,'')
+    def test_sync_handles_line_ending_duplicate_commits(self):
+        self.write('code.ts','const title = "old";\nconst feature = false;\n');self.commit('base');web=self.setup_remote()
+        self.write('code.ts','const title = "new";\nconst feature = false;\n');self.commit('local title change')
+        self.write('code.ts','const title = "new";\nconst feature = true;\n');self.commit('local work')
+        (web/'code.ts').write_bytes(b'const title = "new";\r\nconst feature = false;\r\n')
+        self.git('add','.',cwd=web);self.git('commit','-m','duplicate title change',cwd=web);self.git('push','origin','main',cwd=web)
+        r=self.cli('sync','origin','main');self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual((self.repo/'code.ts').read_text(),'const title = "new";\nconst feature = true;\n')
+    def test_sync_fast_forward_removes_init_and_launchers(self):
+        web=self.setup_remote();(web/'init').write_text('function init() {}\ninit();\n')
+        (web/'init.ts').write_text('export const init = true;\n')
+        (web/'package.json').write_text('{"scripts":{"dev":"node init && next dev","test":"test command"}}')
+        self.git('add','.',cwd=web);self.git('commit','-m','safe but unwanted init',cwd=web);self.git('push','origin','main',cwd=web)
+        r=self.cli('sync');self.assertEqual(r.returncode,0,r.stderr)
+        self.assertFalse((self.repo/'init').exists());self.assertTrue((self.repo/'init.ts').exists())
+        self.assertEqual(json.loads((self.repo/'package.json').read_text())['scripts'],{'dev':'next dev','test':'test command'})
+    def test_sync_blocks_infected_remote_before_checkout(self):
+        web=self.setup_remote();old=self.git('rev-parse','HEAD').stdout.strip()
+        (web/'evil.ts').write_text(self.payload());self.git('add','.',cwd=web);self.git('commit','-m','bad',cwd=web);self.git('push','origin','main',cwd=web)
+        r=self.cli('sync','origin','main');self.assertNotEqual(r.returncode,0);self.assertFalse((self.repo/'evil.ts').exists())
+        self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),old)
+    def test_sync_dirty_checkout_is_not_modified(self):
+        self.setup_remote();self.write('README.md','uncommitted work');old=self.git('rev-parse','HEAD').stdout
+        r=self.cli('sync');self.assertNotEqual(r.returncode,0);self.assertIn('clean checkout',r.stderr)
+        self.assertEqual((self.repo/'README.md').read_text(),'uncommitted work');self.assertEqual(self.git('rev-parse','HEAD').stdout,old)
+    def test_sync_preserves_local_env_exclusion(self):
+        self.write('.gitignore','.env\n');self.commit('ignore');web=self.setup_remote()
+        self.write('local.txt','safe');self.commit('local')
+        (web/'.gitignore').write_text('remote-output/\n');self.git('add','.',cwd=web);self.git('commit','-m','remote ignore edit',cwd=web);self.git('push','origin','main',cwd=web)
+        r=self.cli('sync');self.assertEqual(r.returncode,0,r.stderr)
+        self.assertIn('.env',(self.repo/'.gitignore').read_text().splitlines());self.assertIn('remote-output/',(self.repo/'.gitignore').read_text().splitlines())
+    def test_sync_never_runs_custom_default_merge_driver(self):
+        web=self.setup_remote();self.write('README.md','local\n');old=self.commit('local')
+        marker=self.base/'driver-ran';self.git('config','merge.default','evil');self.git('config','merge.evil.driver','touch '+str(marker))
+        (web/'README.md').write_text('remote\n');self.git('add','.',cwd=web);self.git('commit','-m','remote',cwd=web);self.git('push','origin','main',cwd=web)
+        self.assertNotEqual(self.cli('sync').returncode,0);self.assertFalse(marker.exists());self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),old)
+    def test_sync_cannot_hide_new_infected_local_intermediate_commit(self):
+        web=self.setup_remote();self.write('evil.ts',self.payload());self.commit('local infection')
+        self.git('rm','evil.ts');old=self.commit('clean local tip')
+        (web/'remote.txt').write_text('safe');self.git('add','.',cwd=web);self.git('commit','-m','remote feature',cwd=web);self.git('push','origin','main',cwd=web)
+        r=self.cli('sync');self.assertNotEqual(r.returncode,0)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),old);self.assertFalse((self.repo/'remote.txt').exists())
+    def test_sync_rejects_remote_attribute_driver_before_merging(self):
+        web=self.setup_remote();old=self.git('rev-parse','HEAD').stdout.strip();marker=self.base/'filter-ran'
+        self.git('config','filter.evil.clean','touch '+str(marker))
+        (web/'.gitattributes').write_text('* filter=evil\n');self.git('add','.',cwd=web);self.git('commit','-m','unsafe attributes',cwd=web);self.git('push','origin','main',cwd=web)
+        self.assertNotEqual(self.cli('sync').returncode,0)
+        self.assertFalse(marker.exists());self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),old)
+    def test_sync_ahead_only_retains_clean_local_repair(self):
+        self.write('evil.ts',self.payload());self.commit('published infection');self.setup_remote()
+        self.git('rm','evil.ts');head=self.commit('local removal')
+        r=self.cli('sync');self.assertEqual(r.returncode,0,r.stderr)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout.strip(),head);self.assertFalse((self.repo/'evil.ts').exists())
     def test_hidden_extensionless_payload(self):
         f=g.inspect('init',self.payload().encode());self.assertEqual(f[0]['line'],1);self.assertIn('instruction',f[0])
         self.assertFalse(g.inspect('init',b'function init() {}\ninit();\n'))
