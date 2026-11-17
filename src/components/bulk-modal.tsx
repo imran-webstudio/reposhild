@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CleanupLoader } from "@/components/cleanup-loader";
+import { BroomCleanup, cleanupIssuesFromFindings } from "@/components/broom-cleanup";
 import { DiffView } from "@/components/diff-view";
 import { repoWebUrl } from "@/lib/display";
 import { planRemediation } from "@/lib/sanitizer";
@@ -27,6 +27,13 @@ export function BulkModal({
   const [failures, setFailures] = useState<Array<{ name: string; message: string }>>([]);
   const [finished, setFinished] = useState(0);
   const actionable = plans.filter((plan) => plan.changes.length > 0);
+  const activePlan =
+    actionable.find((plan) => plan.repo.fullName === cursor) ??
+    (finished < actionable.length ? actionable[finished] : actionable[actionable.length - 1]);
+  const activeIssues = useMemo(
+    () => (activePlan ? cleanupIssuesFromFindings(activePlan.repo.findings, activePlan.changes) : []),
+    [activePlan],
+  );
 
   async function applyAll(action: "commit" | "pr") {
     setPending(action);
@@ -61,6 +68,8 @@ export function BulkModal({
     setCursor(null);
     setPending(null);
   }
+
+  const percent = actionable.length > 0 ? Math.min(100, (finished / actionable.length) * 100) : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -156,12 +165,39 @@ export function BulkModal({
         </footer>
         </div>
         {pending && (
-          <CleanupLoader
-            title={pending === "pr" ? "Opening fix pull requests" : "Removing malware"}
-            detail={cursor ? `${cursor} · writing one commit` : "Preparing the cleanup"}
-            done={finished}
-            total={actionable.length}
-          />
+          <div className="cleanup-overlay absolute inset-0 z-20 flex items-center justify-center px-6" role="status" aria-live="polite">
+            <div className="glass w-full max-w-2xl rounded-2xl p-4 sm:p-6">
+              <BroomCleanup
+                key={cursor ?? `bulk-${finished}`}
+                total={Math.max(1, activeIssues.length || activePlan?.repo.findings.length || 1)}
+                removed={0}
+                status="cleaning"
+                label="Pollin Rider"
+                issues={activeIssues}
+              />
+              <p className="mt-3 break-all font-mono text-xs leading-5 text-mist">
+                {pending === "pr" ? "Opening fix pull requests" : "Removing malware"}
+                {cursor ? ` · ${cursor} · writing one commit` : " · preparing the cleanup"}
+              </p>
+              <div className="mt-3">
+                <div
+                  className="h-1 overflow-hidden rounded-full bg-muted"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(percent)}
+                >
+                  <div
+                    className="h-full bg-primary motion-safe:transition-[width] motion-safe:duration-300"
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+                <p className="mt-2 font-mono text-[11px] text-mist">
+                  {finished} / {actionable.length} repositories
+                </p>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

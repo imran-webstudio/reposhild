@@ -33,9 +33,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${sans.variable} ${display.variable} ${mono.variable} dark`} suppressHydrationWarning>
-      <body className="min-h-screen bg-app font-sans text-bone antialiased">
+      <body className="min-h-screen bg-app font-sans text-bone antialiased" suppressHydrationWarning>
         <Script id="theme" strategy="beforeInteractive">
           {`(function(){try{var t=localStorage.getItem("reposhild-theme");var e=document.documentElement;if(t==="light"){e.classList.remove("dark");e.classList.add("light")}else{e.classList.add("dark");e.classList.remove("light")}}catch(err){}})()`}
+        </Script>
+        <Script id="clear-sw" strategy="afterInteractive">
+          {`(function(){if(!("serviceWorker" in navigator))return;navigator.serviceWorker.getRegistrations().then(function(regs){regs.forEach(function(r){r.unregister()})}).catch(function(){})})()`}
         </Script>
         <div className="ambient" aria-hidden="true">
           <div className="ambient-blob ambient-blob-a" />

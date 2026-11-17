@@ -1,14 +1,26 @@
 {
-  "name": "reposhild",
-  "version": "1.0.0",
-  "private": true,
+  "name": "@imranwebstudio/reposhield",
+  "version": "1.0.1",
+  "private": false,
+  "description": "A pre-startup guard that detects suspicious project code before it runs.",
+  "bin": {
+    "reposhield": "bin/reposhield.mjs"
+  },
+  "files": [
+    "bin/reposhield.mjs",
+    "scripts/check-integrity.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "node scripts/check-integrity.mjs && next dev",
     "build": "node scripts/check-integrity.mjs && next build",
     "start": "node scripts/check-integrity.mjs && next start",
     "test": "node scripts/check-integrity.mjs && vitest run",
     "test:watch": "node scripts/check-integrity.mjs && vitest",
-    "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "check:integrity": "node scripts/check-integrity.mjs",
@@ -16,18 +28,19 @@
     "cli:sync": "python3 scripts/build-guard-package.py"
   },
   "dependencies": {
-    "@prisma/client": "^6.16.2",
-    "prisma": "^6.16.2",
     "@octokit/graphql": "^8.2.2",
+    "@prisma/client": "^6.16.2",
     "diff": "^7.0.0",
     "next": "^15.5.4",
     "next-auth": "5.0.0-beta.29",
     "octokit": "^4.1.3",
     "p-limit": "^6.2.0",
+    "prisma": "^6.16.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@imranwebstudio/reposhield": "^1.0.0",
     "@types/diff": "^7.0.2",
     "@types/node": "^22.15.3",
     "@types/react": "^19.1.2",

@@ -236,25 +236,50 @@ function detectSettings(path: string, text: string): Finding[] {
 }
 
 function detectWorkflow(path: string, text: string): Finding[] {
-  const suspicious =
-    /\bcurl\b[^|\n]*\|\s*(?:ba)?sh\b/i.test(text) ||
-    /\bwget\b[^|\n]*\|\s*(?:ba)?sh\b/i.test(text) ||
-    /\bnode\s+api\.js\b/i.test(text) ||
-    /\bpowershell(?:\.exe)?\b[^\n]*-(?:enc|encodedcommand)\b/i.test(text);
-  if (!suspicious) return [];
-  const at = text.search(/curl|wget|api\.js|powershell/i);
+  const hit = workflowDropperHit(text);
+  if (!hit) return [];
   return [
     makeFinding({
       severity: "HIGH",
       path,
-      line: at >= 0 ? lineNumberAt(text, at) : 1,
+      line: hit.line,
       rule: "Workflow shell dropper",
       ruleId: "workflow-dropper",
       strategy: "review-only",
       message: "A workflow step pipes a remote script into a shell or starts api.js. Review it before changing CI.",
-      rawLine: lineAt(text, at >= 0 ? lineNumberAt(text, at) : 1),
+      rawLine: lineAt(text, hit.line),
     }),
   ];
+}
+
+/** True when a workflow line only mentions a dropper as something to scan for (grep/echo), not run. */
+function isWorkflowDetectionMention(line: string): boolean {
+  if (/\b(?:grep|rg|egrep|fgrep|findstr|Select-String)\b/i.test(line)) return true;
+  if (/\becho\b/i.test(line) && /(?:api\.js|inject|malware|trojan|blocked|check|scan|signature)/i.test(line)) {
+    return true;
+  }
+  // `node api.js` appears only inside quotes as a search needle, not as a shell command.
+  const withoutQuoted = line.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, "");
+  if (/\bnode\s+api\.js\b/i.test(line) && !/\bnode\s+api\.js\b/i.test(withoutQuoted)) return true;
+  return false;
+}
+
+function workflowDropperHit(text: string): { line: number } | null {
+  const patterns: RegExp[] = [
+    /\bcurl\b[^|\n]*\|\s*(?:ba)?sh\b/gi,
+    /\bwget\b[^|\n]*\|\s*(?:ba)?sh\b/gi,
+    /\bnode\s+api\.js\b/gi,
+    /\bpowershell(?:\.exe)?\b[^\n]*-(?:enc|encodedcommand)\b/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      const line = lineNumberAt(text, index);
+      if (isWorkflowDetectionMention(lineAt(text, line))) continue;
+      return { line };
+    }
+  }
+  return null;
 }
 
 function detectScriptDropper(path: string, text: string): Finding[] {

@@ -72,7 +72,10 @@ export function PullRepair({ target }: { target: PullTarget | null }) {
         <p className="mt-5 text-sm text-mist">Return to your Git client and retry the pull. Historical commits and existing tags remain unchanged. Your CLI verifies the exact repair and scans the final snapshot.</p>
       </section> : preview && <>
         <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-          <h2 className="text-lg font-semibold">{preview.changes.length} supported file repair{preview.changes.length === 1 ? "" : "s"}</h2>
+          <div>
+            <h2 className="text-lg font-semibold">{preview.changes.length} supported file repair{preview.changes.length === 1 ? "" : "s"}</h2>
+            <p className="mt-1 text-xs text-mist">This counts repairable files in the inspected branch tip, not incoming Git commits.</p>
+          </div>
           <div className="flex flex-wrap gap-3">
             <button className={button} disabled={!!busy || !preview.changes.length || !!preview.unresolved.length} onClick={() => void repair("pr")}>{busy === "pr" ? "Opening PR…" : "Open repair PR"}</button>
             <button className={`${button} bg-primary text-ink`} disabled={!!busy || !preview.changes.length || !!preview.unresolved.length} onClick={() => void repair("commit")}>{busy === "commit" ? "Repairing…" : "Repair branch"}</button>
@@ -80,7 +83,7 @@ export function PullRepair({ target }: { target: PullTarget | null }) {
         </div>
         <p className="mb-6 text-sm leading-6 text-mist">Review the removals below. Repair branch writes one cleanup commit to {target.branch}. Choose a PR when the branch requires review. RepoShield checks the branch has not changed before writing.</p>
         {preview.unresolved.length > 0 && <section className="mb-6 rounded-md border border-accent/40 p-5"><h3 className="font-semibold text-accent">Manual review required</h3><p className="mt-2 text-sm text-mist">Automatic repair is blocked until these findings are resolved.</p><ul className="mt-3 space-y-2 text-sm">{preview.unresolved.map((item, i) => <li key={i} className="break-all font-mono">{item.path}:{item.line} — {item.rule}</li>)}</ul></section>}
-        {!preview.changes.length && <p className="rounded-md border border-line p-5 text-sm text-mist">No supported payload remains at this branch tip. The block may involve historical commits, a tag, or a finding that needs manual review. The CLI remains blocked until those are resolved.</p>}
+        {!preview.changes.length && <p className="rounded-md border border-line p-5 text-sm text-mist">No supported payload remains at this branch tip. Your Git client may still show incoming commits; those are commit counts, not repair counts. The block may involve historical commits, a tag, or a finding that needs manual review. The CLI remains blocked until those are resolved.</p>}
         <div className="space-y-6">{preview.changes.map((change) => <section key={change.path}><h3 className="mb-2 break-all font-mono text-sm">{change.path}:{change.line}</h3><DiffView before={change.before} after={change.after} mode="inline" /></section>)}</div>
       </>}
     </>}

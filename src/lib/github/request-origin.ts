@@ -4,5 +4,12 @@ export function isSameOriginWrite(req: Request): boolean {
   if (!req.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return false;
   const origin = req.headers.get("origin");
   if (!origin) return true; // Non-browser clients still require a valid session cookie.
-  try { return origin === new URL(process.env.AUTH_URL || req.url).origin; } catch { return false; }
+  const candidates = [process.env.AUTH_URL, req.url].filter((value): value is string => Boolean(value));
+  return candidates.some((candidate) => {
+    try {
+      return origin === new URL(candidate).origin;
+    } catch {
+      return false;
+    }
+  });
 }

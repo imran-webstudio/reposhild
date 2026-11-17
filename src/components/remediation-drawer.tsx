@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CleanupLoader } from "@/components/cleanup-loader";
+import { BroomCleanup, cleanupIssuesFromFindings } from "@/components/broom-cleanup";
 import { DiffView } from "@/components/diff-view";
 import { githubFileUrl, repoWebUrl, STRATEGY_LABEL } from "@/lib/display";
 import { planRemediation } from "@/lib/sanitizer";
@@ -21,6 +21,7 @@ export function RemediationDrawer({
   onApplied: (result: RemediationResult) => void;
 }) {
   const plan = useMemo(() => planRemediation(repo.files, repo.findings), [repo]);
+  const cleanupIssues = useMemo(() => cleanupIssuesFromFindings(repo.findings, plan), [repo.findings, plan]);
   const [mode, setMode] = useState<"inline" | "split">("inline");
   const [pending, setPending] = useState<"commit" | "pr" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -286,10 +287,18 @@ export function RemediationDrawer({
         </footer>
         </div>
         {pending && (
-          <CleanupLoader
-            title={pending === "pr" ? "Opening a fix pull request" : "Removing malware"}
-            detail={`${repo.fullName} · writing one commit`}
-          />
+          <div className="cleanup-overlay absolute inset-0 z-20 flex items-center justify-center px-6" role="status" aria-live="polite">
+            <div className="glass w-full max-w-2xl rounded-2xl p-4 sm:p-6">
+              <BroomCleanup
+                total={repo.findings.length}
+                removed={0}
+                status="cleaning"
+                label="Pollin Rider"
+                issues={cleanupIssues}
+              />
+              <p className="mt-3 break-all font-mono text-xs leading-5 text-mist">{pending === "pr" ? "Opening a fix pull request" : "Removing malware"} · {repo.fullName}</p>
+            </div>
+          </div>
         )}
       </div>
     </div>

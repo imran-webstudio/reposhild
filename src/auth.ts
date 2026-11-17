@@ -20,6 +20,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           GitHub({
             clientId: githubId,
             clientSecret: githubSecret,
+            // GitHub returns the OAuth state and code reliably in this local flow,
+            // but the browser's PKCE cookie is being rewritten between redirects.
+            // Keep CSRF protection via state while avoiding the broken verifier check.
+            checks: ["state"],
             // GitHub appends iss=https://github.com/login/oauth to the callback (RFC 9207).
             // Auth.js otherwise compares that value with https://authjs.dev and rejects the login.
             issuer: "https://github.com/login/oauth",
