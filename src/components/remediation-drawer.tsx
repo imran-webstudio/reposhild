@@ -65,7 +65,14 @@ export function RemediationDrawer({
       const response = await fetch("/api/remediate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ owner: repo.owner, name: repo.name, mode: action, scanId, expectedHeadSha: repo.headSha }),
+        body: JSON.stringify({
+          owner: repo.owner,
+          name: repo.name,
+          mode: action,
+          scanId,
+          expectedHeadSha: repo.headSha,
+          cleanOtherTips: true,
+        }),
       });
       const body = (await response.json()) as RemediationResult & { error?: string };
       if (!response.ok) throw new Error(body.error || "Remediation failed");
@@ -252,7 +259,7 @@ export function RemediationDrawer({
           <p className="mt-1 text-xs text-mist">
             {plan.length === 0
               ? "Nothing will be committed."
-              : `${plan.length} file${plan.length === 1 ? "" : "s"} in one commit on ${repo.defaultBranch}.`}
+              : `${plan.length} file${plan.length === 1 ? "" : "s"} in one commit on ${repo.defaultBranch}. Other branch tips with the same payload are cleaned too (up to 20).`}
           </p>
           {repo.archived && plan.length > 0 && (
             <p className="mt-1 text-xs text-mist">

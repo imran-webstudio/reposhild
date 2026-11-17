@@ -1,6 +1,6 @@
 import { getPrisma } from "@/lib/db";
 
-export const ACTIONS = ["sign_in", "sign_out", "scan_started", "scan_finished", "history_viewed", "cleanup_requested", "fix_committed", "fix_pr_opened", "cleanup_failed"] as const;
+export const ACTIONS = ["sign_in", "sign_out", "scan_started", "scan_finished", "history_viewed", "cleanup_requested", "fix_committed", "fix_pr_opened", "cleanup_failed", "reinfection_detected"] as const;
 export type ActivityAction = typeof ACTIONS[number];
 export type ActivityOutcome = "success" | "failure" | "aborted";
 

@@ -51,6 +51,7 @@ export function BulkModal({
             mode: action,
             expectedHeadSha: plan.repo.headSha,
             scanId,
+            cleanOtherTips: true,
           }),
         });
         const body = (await response.json()) as RemediationResult & { error?: string };

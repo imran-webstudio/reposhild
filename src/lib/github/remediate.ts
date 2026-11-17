@@ -1,10 +1,11 @@
 import type { Octokit } from "octokit";
 import { CleanError, httpStatus, publicError } from "@/lib/github/errors";
-import { inspectOwnerRepo } from "@/lib/github/scanner";
+import { inspectBranchTip, inspectOwnerRepo, listBranchNames } from "@/lib/github/scanner";
 import { planRemediation } from "@/lib/sanitizer";
-import type { FileChange, RemediationResult } from "@/lib/scanner/types";
+import type { FileChange, RemediationResult, TipCleanupResult } from "@/lib/scanner/types";
 
 export const REMEDIATION_MESSAGE = "chore(security): remove malicious payload and sanitize scripts";
+const OTHER_TIP_LIMIT = 20;
 
 type TreeMode = "100644" | "100755" | "040000" | "160000" | "120000";
 
@@ -19,6 +20,7 @@ export async function remediateRepository(
   repo: string,
   mode: "commit" | "pr",
   expectedHeadSha?: string,
+  cleanOtherTips = true,
 ): Promise<RemediationResult> {
   try {
     const scanned = await inspectOwnerRepo(octokit, owner, repo);
@@ -49,6 +51,9 @@ export async function remediateRepository(
     try {
       if (mode === "pr") {
         const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
+        const otherTips = cleanOtherTips
+          ? await cleanAdditionalTips(octokit, owner, repo, base, mode)
+          : [];
         return result({
           owner,
           repo,
@@ -57,15 +62,22 @@ export async function remediateRepository(
           branch: opened.branch,
           prUrl: opened.url,
           fallbackToPr: false,
-          message: wasArchived
-            ? `Opened ${opened.url}. The repository stays unarchived so the pull request can be merged.`
-            : `Opened ${opened.url}`,
+          message: appendOtherTipsMessage(
+            wasArchived
+              ? `Opened ${opened.url}. The repository stays unarchived so the pull request can be merged.`
+              : `Opened ${opened.url}`,
+            otherTips,
+          ),
           changes,
+          otherTips,
         });
       }
 
       try {
         const commitSha = await writeCommit(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
+        const otherTips = cleanOtherTips
+          ? await cleanAdditionalTips(octokit, owner, repo, base, "commit")
+          : [];
         const archivedAgain = wasArchived ? await restoreArchive(octokit, owner, repo) : true;
         return result({
           owner,
@@ -75,13 +87,17 @@ export async function remediateRepository(
           branch: base,
           prUrl: null,
           fallbackToPr: false,
-          message: commitMessage(base, wasArchived, archivedAgain, owner, repo),
+          message: appendOtherTipsMessage(commitMessage(base, wasArchived, archivedAgain, owner, repo), otherTips),
           changes,
+          otherTips,
         });
       } catch (error) {
         const status = httpStatus(error);
         if (status !== 422 && status !== 403) throw error;
         const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, base, changes, snapshot, scanned.fileModes);
+        const otherTips = cleanOtherTips
+          ? await cleanAdditionalTips(octokit, owner, repo, base, "pr")
+          : [];
         return result({
           owner,
           repo,
@@ -90,10 +106,14 @@ export async function remediateRepository(
           branch: opened.branch,
           prUrl: opened.url,
           fallbackToPr: true,
-          message: wasArchived
-            ? `Default branch is protected. Opened ${opened.url}. The repository stays unarchived so the pull request can be merged.`
-            : `Default branch is protected. Opened ${opened.url}`,
+          message: appendOtherTipsMessage(
+            wasArchived
+              ? `Default branch is protected. Opened ${opened.url}. The repository stays unarchived so the pull request can be merged.`
+              : `Default branch is protected. Opened ${opened.url}`,
+            otherTips,
+          ),
           changes,
+          otherTips,
         });
       }
     } catch (error) {
@@ -108,6 +128,128 @@ export async function remediateRepository(
     if (error instanceof CleanError) throw error;
     throw wrapWriteError(error, owner, repo);
   }
+}
+
+async function cleanAdditionalTips(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  defaultBranch: string,
+  mode: "commit" | "pr",
+): Promise<TipCleanupResult[]> {
+  let names: string[] = [];
+  try {
+    names = await listBranchNames(octokit, owner, repo, OTHER_TIP_LIMIT + 5);
+  } catch (error) {
+    return [
+      {
+        branch: "*",
+        commitSha: null,
+        prUrl: null,
+        changeCount: 0,
+        status: "failed",
+        detail: `Could not list branches: ${publicError(error)}`,
+      },
+    ];
+  }
+
+  const targets = names
+    .filter((name) => name !== defaultBranch && !name.startsWith("reposhield/sanitize-"))
+    .slice(0, OTHER_TIP_LIMIT);
+  const results: TipCleanupResult[] = [];
+
+  for (const branch of targets) {
+    try {
+      const tip = await inspectBranchTip(octokit, owner, repo, branch);
+      if (tip.warnings.length > 0) {
+        results.push({
+          branch,
+          commitSha: null,
+          prUrl: null,
+          changeCount: 0,
+          status: "skipped",
+          detail: "Incomplete scan coverage on this tip.",
+        });
+        continue;
+      }
+      const changes = planRemediation(tip.files, tip.findings);
+      if (changes.length === 0) continue;
+
+      const head = await readHead(octokit, owner, repo, branch);
+      if (head.sha !== tip.headSha) {
+        results.push({
+          branch,
+          commitSha: null,
+          prUrl: null,
+          changeCount: changes.length,
+          status: "skipped",
+          detail: "Branch tip changed while scanning.",
+        });
+        continue;
+      }
+
+      if (mode === "pr") {
+        const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, branch, changes, head, tip.fileModes);
+        results.push({
+          branch,
+          commitSha: opened.commitSha,
+          prUrl: opened.url,
+          changeCount: changes.length,
+          status: "pr_opened",
+          detail: `Opened ${opened.url}`,
+        });
+        continue;
+      }
+
+      try {
+        const commitSha = await writeCommit(octokit, owner, repo, branch, changes, head, tip.fileModes);
+        results.push({
+          branch,
+          commitSha,
+          prUrl: null,
+          changeCount: changes.length,
+          status: "cleaned",
+          detail: `Committed to ${branch}.`,
+        });
+      } catch (error) {
+        const status = httpStatus(error);
+        if (status !== 422 && status !== 403) throw error;
+        const opened = await commitOnNewBranchAndOpenPr(octokit, owner, repo, branch, changes, head, tip.fileModes);
+        results.push({
+          branch,
+          commitSha: opened.commitSha,
+          prUrl: opened.url,
+          changeCount: changes.length,
+          status: "pr_opened",
+          detail: `Protected tip; opened ${opened.url}`,
+        });
+      }
+    } catch (error) {
+      results.push({
+        branch,
+        commitSha: null,
+        prUrl: null,
+        changeCount: 0,
+        status: "failed",
+        detail: publicError(error),
+      });
+    }
+  }
+
+  return results;
+}
+
+function appendOtherTipsMessage(base: string, otherTips: TipCleanupResult[]): string {
+  if (otherTips.length === 0) return base;
+  const cleaned = otherTips.filter((tip) => tip.status === "cleaned").length;
+  const prs = otherTips.filter((tip) => tip.status === "pr_opened").length;
+  const failed = otherTips.filter((tip) => tip.status === "failed" || tip.status === "skipped").length;
+  const parts = [
+    cleaned > 0 ? `cleaned ${cleaned} other branch tip${cleaned === 1 ? "" : "s"}` : null,
+    prs > 0 ? `opened ${prs} tip PR${prs === 1 ? "" : "s"}` : null,
+    failed > 0 ? `${failed} tip${failed === 1 ? "" : "s"} skipped/failed` : null,
+  ].filter(Boolean);
+  return parts.length ? `${base} Also ${parts.join(", ")}.` : base;
 }
 
 /** Unarchive when needed. Returns true when this cleanup should archive the repository again. */
@@ -364,6 +506,7 @@ function result(input: {
   fallbackToPr: boolean;
   message: string;
   changes: FileChange[];
+  otherTips?: TipCleanupResult[];
 }): RemediationResult {
   return {
     owner: input.owner,
@@ -376,5 +519,6 @@ function result(input: {
     message: input.message,
     changes: input.changes,
     fallbackToPr: input.fallbackToPr,
+    ...(input.otherTips && input.otherTips.length > 0 ? { otherTips: input.otherTips } : {}),
   };
 }

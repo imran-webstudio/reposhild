@@ -141,19 +141,19 @@ export async function finishScan(
     rateRemaining?: number | null;
     rateLimit?: number | null;
   },
-): Promise<void> {
+): Promise<string[]> {
   const db = getPrisma();
-  if (!db) return;
+  if (!db) return [];
   const repos = await db.scanRepo.findMany({
     where: { scanId },
-    select: { status: true, findings: { select: { severity: true } } },
+    select: { status: true, fullName: true, findings: { select: { severity: true } } },
   });
   const infectedCount = repos.filter((repo) => repo.status === "infected").length;
   const criticalCount = repos.reduce(
     (total, repo) => total + repo.findings.filter((finding) => finding.severity === "CRITICAL").length,
     0,
   );
-  await db.scan.update({
+  const scan = await db.scan.update({
     where: { id: scanId },
     data: {
       status: input.status,
@@ -166,10 +166,41 @@ export async function finishScan(
       ...(input.rateRemaining != null ? { rateRemaining: input.rateRemaining } : {}),
       ...(input.rateLimit != null ? { rateLimit: input.rateLimit } : {}),
     },
+    select: { userId: true, user: { select: { githubId: true } } },
   });
-  const account = await db.scan.findUnique({ where: { id: scanId }, select: { user: { select: { githubId: true } } } });
-  await recordActivity(account?.user.githubId, "scan_finished", input.status === "COMPLETED" ? "success" : input.status === "ABORTED" ? "aborted" : "failure", scanId);
+  await recordActivity(
+    scan.user.githubId,
+    "scan_finished",
+    input.status === "COMPLETED" ? "success" : input.status === "ABORTED" ? "aborted" : "failure",
+    scanId,
+  );
 
+  if (input.status !== "COMPLETED") return [];
+  const reinfected = await findReinfectedRepos(
+    scan.userId,
+    repos.filter((repo) => repo.status === "infected").map((repo) => repo.fullName),
+  );
+  for (const fullName of reinfected) {
+    await recordActivity(scan.user.githubId, "reinfection_detected", "failure", fullName);
+  }
+  return reinfected;
+}
+
+/** Previously commit-cleaned repos that show findings again on this scan. */
+export async function findReinfectedRepos(userId: string, infectedFullNames: string[]): Promise<string[]> {
+  const db = getPrisma();
+  if (!db || infectedFullNames.length === 0) return [];
+  const prior = await db.remediation.findMany({
+    where: {
+      userId,
+      mode: "commit",
+      fullName: { in: infectedFullNames },
+    },
+    distinct: ["fullName"],
+    select: { fullName: true },
+  });
+  const cleaned = new Set(prior.map((row) => row.fullName));
+  return infectedFullNames.filter((name) => cleaned.has(name)).sort();
 }
 
 export async function listHistory(githubId: string): Promise<{ scans: ScanSummary[]; remediations: RemediationSummary[] }> {

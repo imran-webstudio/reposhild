@@ -90,8 +90,8 @@ function streamLive(session: GitHubSession, signal: AbortSignal) {
           },
         );
         const status: StoredScanStatus = signal.aborted ? "ABORTED" : "COMPLETED";
-        await closeScan(scanId, status, started, rate, null);
-        send("done", { scanId, scanned, total, elapsedMs: Date.now() - started, rate });
+        const reinfected = await closeScan(scanId, status, started, rate, null);
+        send("done", { scanId, scanned, total, elapsedMs: Date.now() - started, rate, reinfected });
       } catch (error) {
         const aborted = isAbortError(error) || signal.aborted;
         await closeScan(scanId, aborted ? "ABORTED" : "FAILED", started, rate, aborted ? null : publicError(error));
@@ -114,10 +114,10 @@ async function closeScan(
   started: number,
   rate: RateLimitSnapshot | null,
   error: string | null,
-) {
-  if (!scanId) return;
+): Promise<string[]> {
+  if (!scanId) return [];
   try {
-    await finishScan(scanId, {
+    return await finishScan(scanId, {
       status,
       elapsedMs: Date.now() - started,
       error,
@@ -126,6 +126,7 @@ async function closeScan(
     });
   } catch (cause) {
     console.error("Could not finish the scan record", cause);
+    return [];
   }
 }
 

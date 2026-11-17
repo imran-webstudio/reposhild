@@ -4,6 +4,7 @@ import { signIn, signOut, useSession } from "next-auth/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BulkModal } from "@/components/bulk-modal";
 import { LockdownBanner } from "@/components/lockdown-banner";
+import { ReinfectionBanner } from "@/components/reinfection-banner";
 import { RemediationDrawer } from "@/components/remediation-drawer";
 import { formatElapsed, formatWhen, repoWebUrl, statusLabel } from "@/lib/display";
 import type { RemediationSummary, ScanSummary } from "@/lib/history";
@@ -36,6 +37,7 @@ export function Dashboard() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [rate, setRate] = useState<RateLimitSnapshot | null>(null);
   const [lockdown, setLockdown] = useState<LockdownSignal | null>(null);
+  const [reinfected, setReinfected] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -271,9 +273,18 @@ export function Dashboard() {
           setRepos((current) => [payload.repo, ...current.filter((item) => item.fullName !== payload.repo.fullName)]);
         }
         if (event === "done") {
-          const payload = data as { elapsedMs: number; rate?: RateLimitSnapshot };
+          const payload = data as { elapsedMs: number; rate?: RateLimitSnapshot; reinfected?: string[] };
           setProgress((current) => (current ? { ...current, elapsedMs: payload.elapsedMs } : current));
           if (payload.rate) setRate(payload.rate);
+          if (payload.reinfected?.length) {
+            setReinfected(payload.reinfected);
+            setFilter("infected");
+            setToast(
+              `${payload.reinfected.length} previously cleaned repo${payload.reinfected.length === 1 ? "" : "s"} show malware again.`,
+            );
+          } else {
+            setReinfected([]);
+          }
           void refreshHistory();
         }
         if (event === "error") {
@@ -309,9 +320,13 @@ export function Dashboard() {
   }
 
   function absorb(result: RemediationResult) {
+    const tipNote =
+      result.otherTips && result.otherTips.length > 0
+        ? ` Also processed ${result.otherTips.length} other branch tip${result.otherTips.length === 1 ? "" : "s"}.`
+        : "";
     if (result.mode === "pr") {
       setNotice(result);
-      setToast("Fix PR opened. Findings remain until the fix is merged and the repository is scanned again.");
+      setToast(`Fix PR opened. Findings remain until the fix is merged and the repository is scanned again.${tipNote}`);
       void refreshHistory();
       return;
     }
@@ -397,6 +412,11 @@ export function Dashboard() {
         </div>
       </header>
       {lockdown && <LockdownBanner signal={lockdown} />}
+      <ReinfectionBanner
+        repos={reinfected}
+        onReview={() => setFilter("infected")}
+        onDismiss={() => setReinfected([])}
+      />
 
       <main className="mx-auto flex max-w-[1200px] flex-col gap-4 px-4 py-4 sm:px-6">
         {status === "authenticated" && (

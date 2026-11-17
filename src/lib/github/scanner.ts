@@ -106,6 +106,42 @@ export async function inspectOwnerRepo(octokit: Octokit, owner: string, repo: st
   return inspectRemoteRepo(octokit, response.data as unknown as ListedRepo);
 }
 
+/** Scan one branch tip (high-risk files only). Used for multi-branch cleanup. */
+export async function inspectBranchTip(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<{
+  headSha: string;
+  findings: Finding[];
+  files: Record<string, string>;
+  fileModes: Record<string, string>;
+  warnings: string[];
+}> {
+  const ref = await octokit.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+  const headSha = ref.data.object.sha;
+  const loaded = await loadHighRiskFiles(octokit, owner, repo, headSha);
+  const analyzed = analyzeRepositoryFiles(loaded.files);
+  const findings = sortFindings([...analyzed.findings, ...loaded.fontFindings]);
+  return {
+    headSha,
+    findings,
+    files: { ...analyzed.files, ...loaded.fontFiles },
+    fileModes: loaded.fileModes,
+    warnings: loaded.warnings,
+  };
+}
+
+export async function listBranchNames(octokit: Octokit, owner: string, repo: string, limit = 25): Promise<string[]> {
+  const branches = await octokit.paginate(octokit.rest.repos.listBranches, {
+    owner,
+    repo,
+    per_page: 100,
+  });
+  return branches.map((branch) => branch.name).filter(Boolean).slice(0, limit);
+}
+
 export async function inspectRemoteRepo(octokit: Octokit, repo: ListedRepo): Promise<ScannedRepo> {
   const started = Date.now();
   const base = repoShell(repo);

@@ -89,6 +89,15 @@ export interface ScanEventProgress {
   repo: ScannedRepo;
 }
 
+export interface TipCleanupResult {
+  branch: string;
+  commitSha: string | null;
+  prUrl: string | null;
+  changeCount: number;
+  status: "cleaned" | "pr_opened" | "skipped" | "failed";
+  detail: string;
+}
+
 export interface RemediationResult {
   owner: string;
   name: string;
@@ -100,4 +109,6 @@ export interface RemediationResult {
   message: string;
   changes: FileChange[];
   fallbackToPr: boolean;
+  /** Extra branch tips cleaned after the default-branch tip (MVP multi-branch clean). */
+  otherTips?: TipCleanupResult[];
 }

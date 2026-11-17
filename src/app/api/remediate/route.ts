@@ -18,7 +18,7 @@ export async function POST(req: Request) {
   try {
     const body: unknown = await req.json().catch(() => null);
     if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: "Invalid request." }, { status: 400 });
-    const { owner, name, mode, scanId, expectedHeadSha } = body as Record<string, unknown>;
+    const { owner, name, mode, scanId, expectedHeadSha, cleanOtherTips } = body as Record<string, unknown>;
     if (typeof owner !== "string" || typeof name !== "string" || !NAME.test(owner) || !NAME.test(name)) {
       return Response.json({ error: "Invalid repository." }, { status: 400 });
     }
@@ -26,9 +26,17 @@ export async function POST(req: Request) {
     if (typeof expectedHeadSha !== "string" || !/^[a-f0-9]{40,64}$/.test(expectedHeadSha)) {
       return Response.json({ error: "Scan this repository again before cleaning so the preview can be verified." }, { status: 409 });
     }
+    const alsoCleanTips = cleanOtherTips !== false;
     target = `${owner}/${name}`;
     await recordActivity(session.githubId, "cleanup_requested", "success", target);
-    const result = await remediateRepository(createOctokit(session.token), owner, name, mode, expectedHeadSha);
+    const result = await remediateRepository(
+      createOctokit(session.token),
+      owner,
+      name,
+      mode,
+      expectedHeadSha,
+      alsoCleanTips,
+    );
     await recordActivity(session.githubId, result.mode === "pr" ? "fix_pr_opened" : "fix_committed", "success", target);
     try {
       await recordRemediation(session.githubId, typeof scanId === "string" && scanId.length > 0 ? scanId : null, result);
