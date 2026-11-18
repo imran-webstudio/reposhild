@@ -164,9 +164,9 @@ export function BroomCleanup({
   const [liveRemoved, setLiveRemoved] = useState(Math.min(removed, total));
 
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = canvasRef.current!;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d")!;
     if (!ctx) return;
 
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
