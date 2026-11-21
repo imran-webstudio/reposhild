@@ -23,7 +23,7 @@ ZERO = re.compile(r'^0+$')
 HEX = re.compile(r'^[0-9a-f]{40}(?:[0-9a-f]{24})?$')
 FONT_HEADERS = (b'wOFF', b'wOF2', b'OTTO', b'ttcf', b'\x00\x01\x00\x00')
 # Manually reviewed inert scanner fixture. No path-wide/test-wide exclusions.
-REVIEWED_FIXTURES = {('src/lib/scanner/pipeline.test.ts', 'ba95e5e38b9eba38bff161d400fce15c65e702b9db1f88f1f8465001b122d338')}
+REVIEWED_FIXTURES = {('src/lib/scanner/pipeline.test.ts', '79451bcc6f542c1b0d10bdda31f0026f0e720450564e3a5802f6c8e3239b76f8')}
 
 
 class Blocked(Exception):

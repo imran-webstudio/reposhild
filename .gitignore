@@ -8,3 +8,4 @@ dist
 coverage
 .vercel
 config.bat
+.env
