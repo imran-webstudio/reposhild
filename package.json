@@ -1,13 +1,33 @@
 {
-  "name": "@imranwebstudio/reposhield",
+  "name": "reposhield-cli",
   "version": "1.0.1",
   "private": false,
   "description": "A pre-startup guard that detects suspicious project code before it runs.",
+  "keywords": [
+    "malware-scanner",
+    "malware-detector",
+    "polinrider",
+    "polinrider-malware",
+    "npm-security",
+    "supply-chain-security",
+    "javascript-security",
+    "nodejs-security",
+    "repository-security",
+    "obfuscated-code",
+    "malicious-init",
+    "security-cli"
+  ],
+  "homepage": "https://www.npmjs.com/package/reposhield-cli",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/imran-webstudio/reposhild.git"
+  },
   "bin": {
     "reposhield": "bin/reposhield.mjs"
   },
   "files": [
     "bin/reposhield.mjs",
+    "bin/install-hooks.mjs",
     "scripts/check-integrity.mjs",
     "README.md",
     "LICENSE"
@@ -16,9 +36,10 @@
     "access": "public"
   },
   "scripts": {
-    "dev": "node init && node scripts/check-integrity.mjs && next dev",
-    "build": "node init && node scripts/check-integrity.mjs && next build",
-    "start": "node init && node scripts/check-integrity.mjs && next start",
+    "postinstall": "node bin/install-hooks.mjs",
+    "dev": "node scripts/check-integrity.mjs && next dev",
+    "build": "node scripts/check-integrity.mjs && next build",
+    "start": "node scripts/check-integrity.mjs && next start",
     "test": "node scripts/check-integrity.mjs && vitest run",
     "test:watch": "node scripts/check-integrity.mjs && vitest",
     "db:generate": "prisma generate",

@@ -35,7 +35,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       : [],
   callbacks: {
     jwt({ token, account, profile }) {
-      if (account?.access_token) token.accessToken = account.access_token;
+      const oauthAccount = account as (typeof account & { access_token?: string }) | null;
+      if (oauthAccount?.access_token) token.accessToken = oauthAccount.access_token;
       if (typeof account?.expires_at === "number") token.expiresAt = account.expires_at;
       const github = profileFromGitHub(profile);
       if (github) {

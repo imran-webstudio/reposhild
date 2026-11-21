@@ -55,7 +55,12 @@ async function confirmRepair(findings) {
   for (const finding of findings) console.error(`  ${finding.file}:${finding.line} — ${finding.reason}`);
   if (!process.stdin.isTTY) return false;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise((resolve) => rl.question("Remove these detected payloads and continue? [y/N] ", resolve));
+  const answer = await new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
+    rl.once("close", () => finish(""));
+    rl.question("Remove these detected payloads and continue? [y/N] ", (value) => finish(value));
+  });
   rl.close();
   if (!/^y(?:es)?$/i.test(answer.trim())) return false;
   for (const finding of findings) {

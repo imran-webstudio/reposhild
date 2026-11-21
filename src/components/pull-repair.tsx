@@ -8,6 +8,24 @@ import type { PullTarget } from "@/lib/guard/repair";
 import type { PullPreview } from "@/lib/guard/pull";
 
 type Applied = { commitUrl: string; prUrl: string | null; message: string };
+
+async function readApiResponse(response: Response): Promise<Record<string, unknown>> {
+  const raw = await response.text();
+  if (!raw.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    const contentType = response.headers.get("content-type") ?? "unknown content";
+    const preview = raw.replace(/\s+/g, " ").slice(0, 180);
+    throw new Error(`Repair service returned ${contentType} instead of JSON (HTTP ${response.status}). ${preview}`);
+  }
+}
+
+function apiError(body: Record<string, unknown>, fallback: string): string {
+  return typeof body.error === "string" && body.error.trim() ? body.error : fallback;
+}
+
 export function PullRepair({ target }: { target: PullTarget | null }) {
   const { status } = useSession();
   const [reauthenticate, setReauthenticate] = useState(false);
@@ -20,10 +38,11 @@ export function PullRepair({ target }: { target: PullTarget | null }) {
     setBusy("preview");setError(null);
     try {
       const response = await fetch("/api/guard/pull", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...target, action: "preview" }), signal });
-      const body = await response.json();
+      const body = await readApiResponse(response);
       if (response.status === 401) setReauthenticate(true);
-      if (!response.ok) throw new Error(body.error || "Could not inspect this branch.");
-      setPreview(body);
+      if (!response.ok) throw new Error(apiError(body, `Could not inspect this branch (HTTP ${response.status}).`));
+      if (!body.target || !Array.isArray(body.changes) || !Array.isArray(body.unresolved)) throw new Error("Repair service returned an incomplete inspection result. Retry the guarded pull and check the server logs.");
+      setPreview(body as unknown as PullPreview);
     } catch (cause) {
       if (!signal?.aborted) setError(cause instanceof Error ? cause.message : "Inspection failed.");
     } finally { if (!signal?.aborted) setBusy(null); }
@@ -37,10 +56,11 @@ export function PullRepair({ target }: { target: PullTarget | null }) {
     setBusy(action);setError(null);
     try {
       const response = await fetch("/api/guard/pull", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...target, action }) });
-      const body = await response.json();
+      const body = await readApiResponse(response);
       if (response.status === 401) setReauthenticate(true);
-      if (!response.ok) throw new Error(body.error || "Repair failed. A protected branch may require a repair PR.");
-      setApplied(body);
+      if (!response.ok) throw new Error(apiError(body, `Repair failed (HTTP ${response.status}). A protected branch may require a repair PR.`));
+      if (typeof body.commitUrl !== "string" || typeof body.message !== "string") throw new Error("Repair service returned an incomplete repair result. No changes were written.");
+      setApplied(body as unknown as Applied);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Repair failed."); }
     finally { setBusy(null); }
   }
